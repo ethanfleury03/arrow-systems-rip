@@ -685,8 +685,17 @@ int main(int argc, char* argv[]) {
         // Step 4: Verify print execution via Gymea log
         logInfo("Step 4: Verifying print execution...");
 
+        PrintWaitConfig waitCfg;
+        waitCfg.fileSizeBytes = getFileSize(args.inputPdf);
+        waitCfg.requestedPages = (args.pageNumber > 0) ? 1 : 1;
+        waitCfg.effectivePages = waitCfg.requestedPages;
+        waitCfg.dpi = args.dpi;
+        waitCfg.color = useTrueCmyk;
+        waitCfg.timeoutSec = args.verifyTimeoutSec;
+        waitCfg.timeoutExplicit = args.verifyTimeoutExplicit;
+
         PrintVerificationResult vr = verifyPrintExecution(
-            jobId, args.gymeaLogPath, args.verifyTimeoutSec);
+            jobId, args.gymeaLogPath, waitCfg);
 
         if (vr.passed()) {
             logInfo(vr.summary);

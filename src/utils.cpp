@@ -9,6 +9,9 @@
 #include <sys/stat.h>
 #include <cstdio>
 #include <ctime>
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
 
 namespace memjet {
 namespace utils {
@@ -69,6 +72,7 @@ CommandLineArgs parseCommandLine(int argc, char* argv[]) {
             args.legacyJsl = true;
         } else if (arg == "--timeout" && i + 1 < argc) {
             args.verifyTimeoutSec = std::stoi(argv[++i]);
+            args.verifyTimeoutExplicit = true;
         } else if (arg == "--gymea-log" && i + 1 < argc) {
             args.gymeaLogPath = argv[++i];
         } else if (arg[0] != '-') {
@@ -94,7 +98,7 @@ void printUsage(const std::string& programName) {
               << "  --cmyk                 CMYK color mode\n"
               << "  --gray|--grayscale     Grayscale mode (default)\n"
               << "  --legacy-jsl           Use sequential single-color JSL jobs\n"
-              << "  --timeout <sec>        Print verification timeout (default: 45)\n"
+              << "  --timeout <sec>        Force hard timeout in seconds (default: adaptive model)\n"
               << "  --gymea-log <path>     Gymea log path (default: /var/log/gymea/gymea.log)\n"
               << "  --dry-run              Simulate without sending to printer\n"
               << "  -v, --verbose          Verbose output\n"
@@ -196,10 +200,55 @@ void TempFileGuard::release() {
 
 // --- Print Verification ---
 
+namespace {
+int getEnvIntOrDefault(const char* name, int defValue) {
+    if (const char* v = std::getenv(name)) {
+        try {
+            int parsed = std::stoi(v);
+            if (parsed > 0) return parsed;
+        } catch (...) {
+        }
+    }
+    return defValue;
+}
+
+double getDpiMultiplier(int dpi) {
+    if (dpi <= 600) return 1.0;
+    if (dpi <= 1200) return 1.2;
+    if (dpi <= 1600) return 1.45;
+    if (dpi <= 2400) return 1.8;
+    return 2.0;
+}
+} // namespace
+
+int computeAdaptiveVerifyTimeoutSec(const PrintWaitConfig& cfg) {
+    const int pages = std::max(1, (cfg.effectivePages > 0) ? cfg.effectivePages : cfg.requestedPages);
+    const double fileMb = static_cast<double>(cfg.fileSizeBytes) / (1024.0 * 1024.0);
+    const double dpiMult = getDpiMultiplier(cfg.dpi);
+    const double colorMult = cfg.color ? 1.35 : 1.0;
+
+    const double baseSec = 18.0;
+    const double perPageSec = 14.0;
+    const double perMbSec = 0.55;
+
+    double model = (baseSec + perPageSec * static_cast<double>(pages) + perMbSec * fileMb) * dpiMult * colorMult;
+    int timeout = static_cast<int>(std::lround(model));
+
+    const int minSec = 35;
+    const int maxSec = 420;
+    timeout = std::max(minSec, std::min(maxSec, timeout));
+    return timeout;
+}
+
+int defaultStallTimeoutSec(int hardTimeoutSec) {
+    int baseline = std::max(20, hardTimeoutSec / 3);
+    return std::min(120, baseline);
+}
+
 PrintVerificationResult verifyPrintExecution(
     const std::string& jobId,
     const std::string& gymeaLogPath,
-    int timeoutSec) {
+    const PrintWaitConfig& waitCfg) {
 
     PrintVerificationResult result = {};
 
@@ -209,10 +258,31 @@ PrintVerificationResult verifyPrintExecution(
         return result;
     }
 
-    logInfo("Verifying print execution for job " + jobId +
-            " (timeout: " + std::to_string(timeoutSec) + "s)...");
+    const int hardTimeoutSec = waitCfg.timeoutExplicit
+        ? std::max(1, waitCfg.timeoutSec)
+        : computeAdaptiveVerifyTimeoutSec(waitCfg);
 
-    // Patterns to search for (jobId-scoped where possible)
+    const int pollMs = getEnvIntOrDefault("RIP_VERIFY_POLL_MS", 1000);
+    const int stallTimeoutSec = getEnvIntOrDefault("RIP_VERIFY_STALL_SEC", defaultStallTimeoutSec(hardTimeoutSec));
+
+    if (waitCfg.timeoutExplicit) {
+        logInfo("Verification timeout: explicit --timeout=" + std::to_string(hardTimeoutSec) + "s");
+    } else {
+        const double fileMb = static_cast<double>(waitCfg.fileSizeBytes) / (1024.0 * 1024.0);
+        std::ostringstream model;
+        model << std::fixed << std::setprecision(2)
+              << "Verification timeout (adaptive): " << hardTimeoutSec << "s"
+              << " [file=" << fileMb << "MB"
+              << ", pages(req/eff)=" << std::max(1, waitCfg.requestedPages) << "/" << std::max(1, waitCfg.effectivePages)
+              << ", dpi=" << waitCfg.dpi
+              << ", mode=" << (waitCfg.color ? "color" : "mono") << "]";
+        logInfo(model.str());
+    }
+
+    logInfo("Verifying print execution for job " + jobId +
+            " (hard-timeout=" + std::to_string(hardTimeoutSec) +
+            "s, stall-timeout=" + std::to_string(stallTimeoutSec) + "s)...");
+
     std::string patJobDetected = "onNewJobDetected(" + jobId;
     std::string patPageActivated = "newPageHasBeenActivated(" + jobId;
     std::string patMarking = "Marking job " + jobId;
@@ -222,8 +292,25 @@ PrintVerificationResult verifyPrintExecution(
     std::string patFault = "FAULT_";
     std::string patCancel = "CANCEL";
 
-    auto deadline = std::chrono::steady_clock::now() +
-                    std::chrono::seconds(timeoutSec);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(hardTimeoutSec);
+    auto lastProgress = std::chrono::steady_clock::now();
+    std::streamoff lastPos = 0;
+
+    std::string phase = "queued";
+    logInfo("Print state: queued");
+
+    auto setPhase = [&](const std::string& next) {
+        if (phase != next) {
+            phase = next;
+            logInfo("Print state: " + phase);
+        }
+    };
+
+    auto markProgress = [&]() {
+        lastProgress = std::chrono::steady_clock::now();
+    };
+
+    std::string exitReason = "hard timeout exceeded without completion";
 
     while (std::chrono::steady_clock::now() < deadline) {
         std::ifstream logFile(gymeaLogPath);
@@ -231,44 +318,88 @@ PrintVerificationResult verifyPrintExecution(
             break;
         }
 
+        logFile.seekg(lastPos);
         std::string line;
+        bool sawNewData = false;
 
         while (std::getline(logFile, line)) {
-            if (line.find(patJobDetected) != std::string::npos) {
+            sawNewData = true;
+            bool progressedThisLine = false;
+
+            if (!result.jobDetected && line.find(patJobDetected) != std::string::npos) {
                 result.jobDetected = true;
+                setPhase("queued");
+                progressedThisLine = true;
             }
-            if (line.find(patPageActivated) != std::string::npos) {
+            if (!result.pageActivated && line.find(patPageActivated) != std::string::npos) {
                 result.pageActivated = true;
+                setPhase("printing");
+                progressedThisLine = true;
             }
-            if (line.find(patMarking) != std::string::npos &&
-                line.find(patMarkingOk) != std::string::npos) {
+            if (!result.markingComplete && line.find(patMarking) != std::string::npos && line.find(patMarkingOk) != std::string::npos) {
                 result.markingComplete = true;
+                setPhase("completed");
+                progressedThisLine = true;
             }
-            if (line.find(patInPrintMode) != std::string::npos) {
+            if (!result.inPrintMode && line.find(patInPrintMode) != std::string::npos) {
                 result.inPrintMode = true;
+                setPhase("printing");
+                progressedThisLine = true;
             }
-            if (line.find(patPageComplete) != std::string::npos) {
+            if (!result.pageCompleteOk && line.find(patPageComplete) != std::string::npos) {
                 result.pageCompleteOk = true;
+                progressedThisLine = true;
             }
-            // Fault/cancel detection scoped near jobId mentions
             if (line.find(jobId) != std::string::npos) {
-                if (line.find(patFault) != std::string::npos) {
+                if (!result.faultDetected && line.find(patFault) != std::string::npos) {
                     result.faultDetected = true;
+                    setPhase("fault");
+                    progressedThisLine = true;
                 }
-                if (line.find(patCancel) != std::string::npos) {
+                if (!result.cancelDetected && line.find(patCancel) != std::string::npos) {
                     result.cancelDetected = true;
+                    setPhase("fault");
+                    progressedThisLine = true;
                 }
+            }
+
+            if (progressedThisLine) {
+                markProgress();
             }
         }
 
-        if (result.passed() || result.faultDetected || result.cancelDetected) {
+        lastPos = logFile.tellg();
+        if (lastPos < 0) {
+            logFile.clear();
+            logFile.seekg(0, std::ios::end);
+            lastPos = logFile.tellg();
+            if (lastPos < 0) lastPos = 0;
+        }
+
+        if (sawNewData && phase == "queued" && !result.pageActivated) {
+            setPhase("sending");
+        }
+
+        if (result.passed()) {
+            exitReason = "completion signals detected";
+            break;
+        }
+        if (result.faultDetected || result.cancelDetected) {
+            exitReason = result.faultDetected ? "fault detected in Gymea log" : "cancel detected in Gymea log";
             break;
         }
 
-        std::this_thread::sleep_for(std::chrono::seconds(2));
+        const auto now = std::chrono::steady_clock::now();
+        const auto stalledFor = std::chrono::duration_cast<std::chrono::seconds>(now - lastProgress).count();
+        if (stalledFor >= stallTimeoutSec) {
+            exitReason = "stalled: no new job progress for " + std::to_string(stalledFor) + "s";
+            logError("Print verification stall detected for job " + jobId + ": " + exitReason);
+            break;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(pollMs));
     }
 
-    // Build summary and log results
     auto logSignal = [](const std::string& label, const std::string& level,
                         bool found) {
         std::string status = found ? "FOUND" : "NOT FOUND";
@@ -294,12 +425,12 @@ PrintVerificationResult verifyPrintExecution(
         logError("CANCEL detected for job " + jobId);
     }
 
-    // Build summary string
     std::ostringstream ss;
     if (result.passed()) {
-        ss << "Print verified: job " << jobId << " completed successfully";
+        ss << "Print verified: job " << jobId << " completed successfully"
+           << " (reason=" << exitReason << ")";
     } else {
-        ss << "Missing REQUIRED signals:";
+        ss << "Print not completed (reason=" << exitReason << "). Missing REQUIRED signals:";
         if (!result.jobDetected) ss << " onNewJobDetected";
         if (!result.pageActivated) ss << " newPageHasBeenActivated";
         if (!result.markingComplete) ss << " Marking_job_PAGE_COMPLETE_OK";
@@ -309,6 +440,16 @@ PrintVerificationResult verifyPrintExecution(
     result.summary = ss.str();
 
     return result;
+}
+
+PrintVerificationResult verifyPrintExecution(
+    const std::string& jobId,
+    const std::string& gymeaLogPath,
+    int timeoutSec) {
+    PrintWaitConfig cfg;
+    cfg.timeoutSec = timeoutSec;
+    cfg.timeoutExplicit = true;
+    return verifyPrintExecution(jobId, gymeaLogPath, cfg);
 }
 
 } // namespace utils

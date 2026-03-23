@@ -24,6 +24,7 @@ struct CommandLineArgs {
     bool cmyk = false;
     bool legacyJsl = false;
     int verifyTimeoutSec = 45;
+    bool verifyTimeoutExplicit = false;
     std::string gymeaLogPath = "/var/log/gymea/gymea.log";
 };
 
@@ -77,6 +78,24 @@ struct PrintVerificationResult {
                && !faultDetected && !cancelDetected;
     }
 };
+
+struct PrintWaitConfig {
+    size_t fileSizeBytes = 0;
+    int requestedPages = 1;
+    int effectivePages = 1;
+    int dpi = 1600;
+    bool color = false;
+    int timeoutSec = 45;
+    bool timeoutExplicit = false;
+};
+
+int computeAdaptiveVerifyTimeoutSec(const PrintWaitConfig& cfg);
+int defaultStallTimeoutSec(int hardTimeoutSec);
+
+PrintVerificationResult verifyPrintExecution(
+    const std::string& jobId,
+    const std::string& gymeaLogPath,
+    const PrintWaitConfig& waitCfg);
 
 PrintVerificationResult verifyPrintExecution(
     const std::string& jobId,
