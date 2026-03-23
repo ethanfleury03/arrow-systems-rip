@@ -9,6 +9,7 @@ set "BUILD=%SRC%\build"
 set "EXE=%BUILD%\Release\memjet-rip.exe"
 set "JSL_RUNTIME=%ROOT%\vendor\runtime\jsl"
 set "GS_STUB=%ROOT%\gswin64c"
+set "GS_STUB_EXE=%ROOT%\gswin64c.exe"
 
 if not exist "%SRC%\CMakeLists.txt" (
   echo [ERROR] Missing %SRC%\CMakeLists.txt
@@ -23,14 +24,29 @@ if not exist "%JSL_RUNTIME%" (
 
 set "PATH=%JSL_RUNTIME%;%PATH%"
 
-if exist "%GS_STUB%" set "PATH=%ROOT%;%PATH%"
+if exist "%GS_STUB%" (
+  echo [WARN] Local gswin64c shim detected at repo root: %GS_STUB%
+  echo [WARN] This can shadow the real Ghostscript binary.
+)
+if exist "%GS_STUB_EXE%" (
+  echo [WARN] Local gswin64c.exe detected at repo root: %GS_STUB_EXE%
+  echo [WARN] This can shadow the real Ghostscript binary.
+)
 
-where gswin64c >nul 2>nul
-if errorlevel 1 (
+for /f "delims=" %%G in ('where gswin64c 2^>nul') do (
+  echo [INFO] gswin64c=%%G
+  set "GS_FOUND=1"
+  goto gs_found
+)
+
+:gs_not_found
+if not defined GS_FOUND (
   echo [ERROR] gswin64c not found in PATH
-  echo [HINT] Install Ghostscript or provide local gswin64c wrapper in repo root
+  echo [HINT] Install Ghostscript (gswin64c.exe)
   exit /b 1
 )
+
+:gs_found
 
 echo [OK] setup-env complete
 echo [INFO] ROOT=%ROOT%
