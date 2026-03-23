@@ -8,6 +8,7 @@ set "SRC=%ROOT%\src"
 set "BUILD=%SRC%\build"
 set "EXE=%BUILD%\Release\memjet-rip.exe"
 set "JSL_RUNTIME=%ROOT%\vendor\runtime\jsl"
+set "PDL_THRIFT_ROOT=%ROOT%\vendor\pdl_py"
 set "GS_STUB=%ROOT%\gswin64c"
 set "GS_STUB_EXE=%ROOT%\gswin64c.exe"
 
@@ -22,7 +23,14 @@ if not exist "%JSL_RUNTIME%" (
   exit /b 1
 )
 
+if not exist "%PDL_THRIFT_ROOT%\thrift" (
+  echo [ERROR] Missing Thrift python runtime: %PDL_THRIFT_ROOT%\thrift
+  echo [HINT] Ensure vendor\pdl_py contains thrift\ and Memjet\ packages
+  exit /b 1
+)
+
 set "PATH=%JSL_RUNTIME%;%PATH%"
+set "PDL_THRIFT_ROOT=%PDL_THRIFT_ROOT%"
 
 if exist "%GS_STUB%" (
   echo [WARN] Local gswin64c shim detected at repo root: %GS_STUB%
@@ -51,4 +59,5 @@ if not defined GS_FOUND (
 echo [OK] setup-env complete
 echo [INFO] ROOT=%ROOT%
 echo [INFO] JSL_RUNTIME=%JSL_RUNTIME%
+echo [INFO] PDL_THRIFT_ROOT=%PDL_THRIFT_ROOT%
 exit /b 0
