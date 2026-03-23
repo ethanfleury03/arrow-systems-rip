@@ -15,8 +15,17 @@
 #include <cerrno>
 #include <ctime>
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <process.h>
 #include <windows.h>
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
 #include <io.h>
 #else
 #include <unistd.h>
