@@ -54,31 +54,38 @@ echo [INFO] Starting RIP...
 
 REM ===== Start RIP =====
 set "RIP_EXE="
+
+REM Keep lookup order explicit; chained IF forms can misparse in cmd when invoked via call .\script.bat.
 if exist "C:\Users\Arrow\Arrow-Rip\build\release\memjet-rip.exe" set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\build\release\memjet-rip.exe"
-if not defined RIP_EXE if exist "C:\Users\Arrow\Arrow-Rip\build\Release\memjet-rip.exe" set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\build\Release\memjet-rip.exe"
-if not defined RIP_EXE if exist "C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe" set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe"
-if not defined RIP_EXE if exist "%~dp0build\release\memjet-rip.exe" set "RIP_EXE=%~dp0build\release\memjet-rip.exe"
-if not defined RIP_EXE if exist "%~dp0build\Release\memjet-rip.exe" set "RIP_EXE=%~dp0build\Release\memjet-rip.exe"
-if not defined RIP_EXE if exist "%~dp0build\memjet-rip.exe" set "RIP_EXE=%~dp0build\memjet-rip.exe"
+if defined RIP_EXE goto rip_exe_resolved
+if exist "C:\Users\Arrow\Arrow-Rip\build\Release\memjet-rip.exe" set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\build\Release\memjet-rip.exe"
+if defined RIP_EXE goto rip_exe_resolved
+if exist "C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe" set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe"
+if defined RIP_EXE goto rip_exe_resolved
+if exist "%~dp0build\release\memjet-rip.exe" set "RIP_EXE=%~dp0build\release\memjet-rip.exe"
+if defined RIP_EXE goto rip_exe_resolved
+if exist "%~dp0build\Release\memjet-rip.exe" set "RIP_EXE=%~dp0build\Release\memjet-rip.exe"
+if defined RIP_EXE goto rip_exe_resolved
+if exist "%~dp0build\memjet-rip.exe" set "RIP_EXE=%~dp0build\memjet-rip.exe"
+if defined RIP_EXE goto rip_exe_resolved
 
-if not defined RIP_EXE (
-  echo [ERROR] RIP executable not found. Checked:
-  echo [ERROR]   C:\Users\Arrow\Arrow-Rip\build\release\memjet-rip.exe
-  echo [ERROR]   C:\Users\Arrow\Arrow-Rip\build\Release\memjet-rip.exe
-  echo [ERROR]   C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe
-  echo [ERROR]   %~dp0build\release\memjet-rip.exe
-  echo [ERROR]   %~dp0build\Release\memjet-rip.exe
-  echo [ERROR]   %~dp0build\memjet-rip.exe
-  exit /b 1
-)
+echo [ERROR] RIP executable not found. Checked:
+echo [ERROR]   C:\Users\Arrow\Arrow-Rip\build\release\memjet-rip.exe
+echo [ERROR]   C:\Users\Arrow\Arrow-Rip\build\Release\memjet-rip.exe
+echo [ERROR]   C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe
+echo [ERROR]   %~dp0build\release\memjet-rip.exe
+echo [ERROR]   %~dp0build\Release\memjet-rip.exe
+echo [ERROR]   %~dp0build\memjet-rip.exe
+exit /b 1
 
+:rip_exe_resolved
 echo [INFO] Launch command: "%RIP_EXE%" %*
 call "%RIP_EXE%" %*
 set "RIP_LAUNCH_RC=%ERRORLEVEL%"
-if not "%RIP_LAUNCH_RC%"=="0" (
-  echo [ERROR] RIP launch failed (exit code %RIP_LAUNCH_RC%).
-  exit /b 1
-)
+if "%RIP_LAUNCH_RC%"=="0" goto rip_ok
+echo [ERROR] RIP launch failed (exit code %RIP_LAUNCH_RC%).
+exit /b 1
 
+:rip_ok
 echo [INFO] RIP exited successfully.
 endlocal & exit /b 0
