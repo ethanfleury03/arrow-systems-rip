@@ -7,7 +7,6 @@
 #include <chrono>
 #include <cstdlib>
 #include <vector>
-#include <filesystem>
 
 namespace memjet {
 
@@ -103,8 +102,8 @@ bool JSLWrapper::initialize() {
         };
 
         for (const auto& p : candidates) {
-            std::error_code ec;
-            if (std::filesystem::exists(p, ec)) {
+            std::ifstream probe(p);
+            if (probe.good()) {
                 configPath_ = p;
                 break;
             }
