@@ -52,8 +52,27 @@ if errorlevel 1 exit /b 1
 echo [INFO] RIP_TEMP_DIR=%RIP_TEMP_DIR%
 echo [INFO] Starting RIP...
 
-REM ===== Start your RIP command here =====
-REM Replace the line below with your actual command:
-REM C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe --your --args
+REM ===== Start RIP =====
+set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe"
+if not exist "%RIP_EXE%" (
+  REM Canonical build output path is C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe; allow repo-local fallback.
+  set "RIP_EXE=%~dp0build\memjet-rip.exe"
+)
 
+if not exist "%RIP_EXE%" (
+  echo [ERROR] RIP executable not found. Checked:
+  echo [ERROR]   C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe
+  echo [ERROR]   %~dp0build\memjet-rip.exe
+  exit /b 1
+)
+
+echo [INFO] Launch command: "%RIP_EXE%" %*
+call "%RIP_EXE%" %*
+set "RIP_LAUNCH_RC=%ERRORLEVEL%"
+if not "%RIP_LAUNCH_RC%"=="0" (
+  echo [ERROR] RIP launch failed (exit code %RIP_LAUNCH_RC%).
+  exit /b 1
+)
+
+echo [INFO] RIP exited successfully.
 endlocal & exit /b 0
