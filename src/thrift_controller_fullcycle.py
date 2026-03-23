@@ -338,7 +338,19 @@ def _run_one(client, cmd_ttypes, raw):
                 print("[Thrift Real] prepare retry %d (elapsed=%.2fs): %s" % (attempt, elapsed, e))
                 time.sleep(0.4)
     elif token == 'start':
+        pre_status = _status_to_json(client.getStatus())
+        pre_state = (pre_status.get("state_after") or pre_status.get("engineState") or "UNKNOWN").strip().upper()
+        print("[Thrift Real] start precheck: state=%s ready=%s queueLen=%s" % (
+            pre_state,
+            pre_status.get("isReadyForPrintData"),
+            pre_status.get("queueLen")))
         result = client.startPrinting()
+        post_status = _status_to_json(client.getStatus())
+        post_state = (post_status.get("state_after") or post_status.get("engineState") or "UNKNOWN").strip().upper()
+        print("[Thrift Real] start postcheck: state=%s ready=%s queueLen=%s" % (
+            post_state,
+            post_status.get("isReadyForPrintData"),
+            post_status.get("queueLen")))
     elif token == 'finish':
         result = client.finishPrinting()
     elif token == 'shutdown':

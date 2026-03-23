@@ -942,15 +942,13 @@ bool PesOrchestrator::guardedPrepare(int mediaSpeed) {
 bool PesOrchestrator::guardedStart() {
     PesStatus st = getStatus();
     std::string stateBefore = extractAndNormalizeState(st);
-    
-    // C3: Strict gate - only PRINT_READY in normal flow (per Memjet docs)
+
     bool bypassStateGates = false;
     if (const char* v = std::getenv("PES_BYPASS_STATE_GATES")) {
         std::string s(v);
         std::transform(s.begin(), s.end(), s.begin(), ::tolower);
         bypassStateGates = (s == "1" || s == "true" || s == "yes" || s == "on");
     }
-
 
     bool allowUnknownReady = false;
     if (const char* v = std::getenv("PES_ALLOW_UNKNOWN_READY")) {
@@ -959,36 +957,59 @@ bool PesOrchestrator::guardedStart() {
         allowUnknownReady = (s == "1" || s == "true" || s == "yes" || s == "on");
     }
 
-    // Tightened start gate from live capture behavior:
-    // startPrinting should occur only after PRINT_READY is observed,
-    // or when readiness flag is true with a non-fault state.
-    bool startStateAllowed = (st.state == PesEngineState::PRINT_READY) ||
-                             (stateBefore == "PRINT_READY") ||
-                             (st.isReadyForPrintData && stateBefore != "FAULT");
+    // START_PRINT gating: align accepted pre-start states with post-prepare wait.
+    const bool stateIsPrintReady = (st.state == PesEngineState::PRINT_READY) || (stateBefore == "PRINT_READY");
+    const bool stateIsQueuedPaused =
+        ((st.state == PesEngineState::PAUSED) || (stateBefore == "PAUSED") ||
+         (st.state == PesEngineState::MID_JOB) || (stateBefore == "MID_JOB")) &&
+        st.queueLen > 0;
+    const bool readyFlagInKnownStartState =
+        st.isReadyForPrintData &&
+        (stateBefore == "PRINT_READY" || stateBefore == "PAUSED" || stateBefore == "MID_JOB");
+
+    bool startStateAllowed = stateIsPrintReady || stateIsQueuedPaused || readyFlagInKnownStartState;
 
     // Optional degraded-mode fallback for ambiguous status probe.
     if (!startStateAllowed && allowUnknownReady && stateBefore == "UNKNOWN" && st.isReadyForPrintData) {
         startStateAllowed = true;
     }
 
+    {
+        std::ostringstream gate;
+        gate << "START_PRINT gate check: state=" << stateBefore
+             << " enum=" << stateToString(st.state)
+             << " ready=" << (st.isReadyForPrintData ? "true" : "false")
+             << " queueLen=" << st.queueLen
+             << " bypass=" << (bypassStateGates ? "true" : "false")
+             << " allowUnknownReady=" << (allowUnknownReady ? "true" : "false")
+             << " decision=" << ((bypassStateGates || startStateAllowed) ? "ALLOW" : "BLOCK");
+        logInfo(gate.str());
+    }
+
     if (!bypassStateGates && !startStateAllowed) {
         logOrchestrationStep("guarded_start", stateBefore, stateBefore,
                             st.isReadyForPrintData, st.queueLen,
-                            "BLOCKED", "STRICT_GATE_REQUIRE_PRINT_READY_OR_READY_FLAG", 0);
+                            "BLOCKED", "START_PRINT_GATE_BLOCKED_INVALID_PES_STATE", 0);
         return false;
     }
-    
+
     std::string result = runThriftCmd("start");
-    bool success = (result.find("ERROR") == std::string::npos && 
-                    result.find("error") == std::string::npos);
-    
+    bool success = (result.find("ERROR") == std::string::npos &&
+                    result.find("error") == std::string::npos &&
+                    result.find("Traceback") == std::string::npos);
+
+    if (!success) {
+        std::string snip = result.substr(0, std::min<size_t>(result.size(), 280));
+        logError("START_PRINT thrift call failed: " + snip);
+    }
+
     PesStatus afterStart = getStatus();
     std::string stateAfter = extractAndNormalizeState(afterStart);
-    
+
     logOrchestrationStep("guarded_start", stateBefore, stateAfter,
                         afterStart.isReadyForPrintData, afterStart.queueLen,
-                        success ? "OK" : "FAILED", success ? "" : "START_FAILED", 0);
-    
+                        success ? "OK" : "FAILED", success ? "" : "START_PRINT_THRIFT_FAILED", 0);
+
     return success;
 }
 
@@ -1279,9 +1300,27 @@ bool PesOrchestrator::runPrintSession(JSLWrapper& jsl,
 
     // GATE 7: start
     phase_ = SessionPhase::STARTING;
+    PesStatus beforeStart = getStatus();
+    std::string beforeStartStateAfter = extractAndNormalizeState(beforeStart);
+    logOrchestrationStep("start_print_precheck", beforeStartStateAfter, beforeStartStateAfter,
+                        beforeStart.isReadyForPrintData, beforeStart.queueLen,
+                        "START", "", 0);
+
     if (!guardedStart()) {
-        return cleanup("startPrinting rejected");
+        return cleanup("startPrinting rejected by START_PRINT gate/thrift failure");
     }
+
+    PesStatus startAccepted = getStatus();
+    std::string startAcceptedStateAfter = extractAndNormalizeState(startAccepted);
+    bool startTransitionVisible = (startAcceptedStateAfter == "PRE_JOB") ||
+                                  (startAcceptedStateAfter == "PRINTING") ||
+                                  (startAcceptedStateAfter == "MID_JOB") ||
+                                  (startAcceptedStateAfter == "PAUSED" && startAccepted.queueLen > 0) ||
+                                  (startAcceptedStateAfter == "SESSION_COMPLETE");
+    logOrchestrationStep("start_print_postcheck", beforeStartStateAfter, startAcceptedStateAfter,
+                        startAccepted.isReadyForPrintData, startAccepted.queueLen,
+                        startTransitionVisible ? "OK" : "WARN",
+                        startTransitionVisible ? "" : "START_PRINT_NO_IMMEDIATE_ACTIVE_TRANSITION", 0);
 
     // GATE 8: Wait SESSION_COMPLETE after start
     if (!waitSessionCompleteAfterStart(60000)) {
