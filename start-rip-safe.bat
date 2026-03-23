@@ -30,22 +30,9 @@ if not exist "%RIP_ROOT%\incoming" mkdir "%RIP_ROOT%\incoming"
 if not exist "%RIP_ROOT%\failed" mkdir "%RIP_ROOT%\failed"
 
 REM ===== Free-space check =====
-set "RIP_FREE_BYTES_RAW="
-for /f "tokens=5" %%A in ('fsutil volume diskfree %RIP_DRIVE% ^| find "Total free bytes"') do set "RIP_FREE_BYTES_RAW=%%A"
-set "RIP_FREE_BYTES=%RIP_FREE_BYTES_RAW:,=%"
-
-if not defined RIP_FREE_BYTES (
-  echo [ERROR] Could not parse free space from fsutil for %RIP_DRIVE%.
-  exit /b 1
-)
-
-echo(%RIP_FREE_BYTES%| findstr /R "^[0-9][0-9]*$" >nul || (
-  echo [ERROR] Could not parse free space from fsutil for %RIP_DRIVE%.
-  exit /b 1
-)
-
+echo [INFO] Checking free space on %RIP_DRIVE%...
 powershell -NoProfile -Command ^
-"$free=[int64]%RIP_FREE_BYTES%; $required=[int64]%RIP_MIN_FREE_GB%*1GB; $freeGb=[math]::Round($free/1GB,2); $requiredGb=[math]::Round($required/1GB,2); if($free -lt $required){Write-Host ('[ERROR] Low space on %RIP_DRIVE%: ' + $freeGb + ' GB free (need >= ' + $requiredGb + ' GB)'); exit 1}else{Write-Host ('[OK] %RIP_DRIVE% free: ' + $freeGb + ' GB (required >= ' + $requiredGb + ' GB)'); exit 0}"
+"$drive='%RIP_DRIVE%'; $minGb=[double]'%RIP_MIN_FREE_GB%'; $required=[int64]($minGb*1GB); $disk=Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DeviceID -eq $drive } | Select-Object -First 1; if(-not $disk){Write-Host ('[ERROR] Drive not found: ' + $drive); exit 1}; $freeText=[string]$disk.FreeSpace; [int64]$free=0; if(-not [int64]::TryParse($freeText,[ref]$free)){Write-Host ('[ERROR] Invalid free space value for ' + $drive + ': ' + $freeText); exit 1}; $freeGb=[math]::Round($free/1GB,2); $requiredGb=[math]::Round($required/1GB,2); if($free -lt $required){Write-Host ('[ERROR] Low space on ' + $drive + ': ' + $freeGb + ' GB free (required >= ' + $requiredGb + ' GB)'); exit 1}else{Write-Host ('[OK] ' + $drive + ' free: ' + $freeGb + ' GB (required >= ' + $requiredGb + ' GB)'); exit 0}"
 if errorlevel 1 exit /b 1
 
 echo [INFO] RIP_TEMP_DIR=%RIP_TEMP_DIR%
