@@ -46,6 +46,8 @@ def _setup_import_paths():
         candidates.append(env_root)
 
     candidates.append(script_dir)
+    # Local vendored SDK path used by this repo
+    candidates.append(os.path.abspath(os.path.join(script_dir, '..', 'vendor', 'pdl_py')))
     candidates.append(os.path.abspath(os.path.join(script_dir, 'pdl-source', 'PDL', 'MJ6.5.0-2.el7')))
     candidates.append(os.path.abspath(os.path.join(script_dir, '..', 'pdl-source', 'PDL', 'MJ6.5.0-2.el7')))
 
