@@ -65,3 +65,19 @@ Expected behavior:
 - Verification state logs include transitions like queued/sending/printing/completed/fault when observed.
 - Completion succeeds on required Gymea completion signals.
 - Timeout now acts as guardrail; failures indicate explicit reason (stall/fault/cancel/hard-timeout).
+
+## 1600-DPI Ghostscript fail-fast validation (Ethan)
+
+Run from `C:\Users\Arrow\Arrow-Rip`:
+
+```bat
+set USE_TRUE_CMYK=0
+set USE_FAST_MONO=0
+build\Release\memjet-rip.exe -i C:\print\ethan-problem.pdf --dry-run --dpi 1600 -v
+```
+
+Expected behavior:
+- RIP stays at 1600 DPI (no automatic fallback to lower DPI).
+- If Ghostscript exits non-zero OR stderr includes page draw failure signatures, RIP aborts immediately before bilevel conversion.
+- If PGM is truncated/partial, RIP reports exact `actualBytes` vs `expectedTotalBytes` and aborts.
+- One guarded retry may occur at the same 1600 DPI only when first-pass output validation fails (transient file race).

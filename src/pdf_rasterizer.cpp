@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <system_error>
+#include <cctype>
 #ifdef _WIN32
 #include <process.h>
 #else
@@ -196,6 +197,55 @@ TempSpaceCheck preflightTempSpaceForPam(const fs::path& tempDir,
     out.requiredBytes = required;
     out.minFreeBytes = minFreeBytes;
     return out;
+}
+
+std::string readTextFile(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return "";
+    std::ostringstream oss;
+    oss << file.rdbuf();
+    return oss.str();
+}
+
+std::string tailText(const std::string& input, size_t maxChars) {
+    if (input.size() <= maxChars) return input;
+    return input.substr(input.size() - maxChars);
+}
+
+std::string shellQuote(const std::string& arg) {
+#ifdef _WIN32
+    std::string out = "\"";
+    for (char ch : arg) {
+        if (ch == '"') out += "\\\"";
+        else out += ch;
+    }
+    out += "\"";
+    return out;
+#else
+    std::string out = "'";
+    for (char ch : arg) {
+        if (ch == '\'') out += "'\\''";
+        else out += ch;
+    }
+    out += "'";
+    return out;
+#endif
+}
+
+bool containsPageDrawFailure(const std::string& s) {
+    std::string lower = s;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return (lower.find("page drawing error occurred") != std::string::npos) ||
+           (lower.find("could not draw this page at all") != std::string::npos);
+}
+
+uintmax_t safeFileSize(const std::string& path) {
+    std::error_code ec;
+    auto sz = fs::file_size(path, ec);
+    if (ec) return 0;
+    return sz;
 }
 
 } // namespace
@@ -413,90 +463,146 @@ RasterFileInfo PDFRasterizer::rasterizeToFile(const std::string& pdfPath,
         throw RasterizationException("Rasterizer not initialized");
     }
 
-    // Unique temp path using PID + high-res timestamp to avoid collisions
     auto now = std::chrono::steady_clock::now();
     auto us = std::chrono::duration_cast<std::chrono::microseconds>(
         now.time_since_epoch()).count();
     const std::string tempDir = getTempDirPath();
-    std::ostringstream tmpPath;
+
+    auto makeTempPgmPath = [&](int attempt) {
+        std::ostringstream tmpPath;
 #ifdef _WIN32
-    tmpPath << tempDir << "/rip_" << _getpid() << "_" << us << ".pgm";
+        tmpPath << tempDir << "/rip_" << _getpid() << "_" << us << "_a" << attempt << ".pgm";
 #else
-    tmpPath << tempDir << "/rip_" << getpid() << "_" << us << ".pgm";
+        tmpPath << tempDir << "/rip_" << getpid() << "_" << us << "_a" << attempt << ".pgm";
 #endif
-    std::string tempPgm = tmpPath.str();
-
-    std::string stderrFile = tempPgm + ".stderr";
-
-    // Build Ghostscript command -- pgmraw outputs P5 grayscale directly
-    std::ostringstream cmd;
-    cmd << "gswin64c ";
-    cmd << "-q ";
-    cmd << "-dNOPAUSE ";
-    cmd << "-dBATCH ";
-    cmd << "-sDEVICE=pgmraw ";
+        return tmpPath.str();
+    };
 
     int xDpi = params.dpi;
     int yDpi = (params.yDpi > 0) ? params.yDpi : params.dpi;
-    if (xDpi == yDpi) {
-        cmd << "-r" << xDpi << " ";
-    } else {
-        cmd << "-r" << xDpi << "x" << yDpi << " ";
-    }
 
-    cmd << "-sOutputFile=" << tempPgm << " ";
-
-    if (!params.paperSize.empty()) {
-        cmd << "-sPAPERSIZE=" << params.paperSize << " ";
-    }
-
-    if (params.pageNumber > 0) {
-        cmd << "-dFirstPage=" << params.pageNumber << " ";
-        cmd << "-dLastPage=" << params.pageNumber << " ";
-    }
-
-    cmd << "-f \"" << pdfPath << "\"";
+    auto buildGhostscriptCommand = [&](const std::string& tempPgm, const std::string& stderrFile) {
+        std::ostringstream cmd;
 #ifdef _WIN32
-    cmd << " 2>\"" << stderrFile << "\"";
+        cmd << "gswin64c ";
 #else
-    cmd << " 2>" << stderrFile;
+        cmd << "gs ";
 #endif
+        cmd << "-q -dNOPAUSE -dBATCH -dSAFER ";
+        cmd << "-dPDFSTOPONERROR ";
+        cmd << "-dAutoRotatePages=/None ";
+        cmd << "-dBandBufferSpace=200000000 -dBufferSpace=200000000 ";
+        cmd << "-sDEVICE=pgmraw ";
 
-    std::cout << "[INFO] Executing: " << cmd.str() << std::endl;
-
-    int status = system(cmd.str().c_str());
-    if (status != 0) {
-        int exitCode = status;
-        // Read stderr for diagnostics
-        std::ifstream errFile(stderrFile);
-        std::string errMsg;
-        if (errFile) {
-            std::ostringstream ess;
-            ess << errFile.rdbuf();
-            errMsg = ess.str();
+        if (xDpi == yDpi) {
+            cmd << "-r" << xDpi << " ";
+        } else {
+            cmd << "-r" << xDpi << "x" << yDpi << " ";
         }
-        std::remove(stderrFile.c_str());
+
+        cmd << "-sOutputFile=" << shellQuote(tempPgm) << " ";
+
+        if (!params.paperSize.empty()) {
+            cmd << "-sPAPERSIZE=" << params.paperSize << " ";
+        }
+
+        if (params.pageNumber > 0) {
+            cmd << "-dFirstPage=" << params.pageNumber << " ";
+            cmd << "-dLastPage=" << params.pageNumber << " ";
+        }
+
+        cmd << "-f " << shellQuote(pdfPath);
+        cmd << " 2>" << shellQuote(stderrFile);
+        return cmd.str();
+    };
+
+    std::string finalTempPgm;
+    std::string failureReason;
+
+    for (int attempt = 1; attempt <= 2; ++attempt) {
+        const std::string tempPgm = makeTempPgmPath(attempt);
+        const std::string stderrFile = tempPgm + ".stderr";
         std::remove(tempPgm.c_str());
-        throw RasterizationException("Ghostscript failed (exit " +
-            std::to_string(exitCode) + "): " + errMsg);
+        std::remove(stderrFile.c_str());
+
+        const std::string cmd = buildGhostscriptCommand(tempPgm, stderrFile);
+        std::cout << "[INFO] Executing GS (attempt " << attempt << "/2): " << cmd << std::endl;
+        int status = system(cmd.c_str());
+
+        const std::string errMsg = readTextFile(stderrFile);
+        const std::string errTail = tailText(errMsg, 1200);
+        const uintmax_t outputSize = safeFileSize(tempPgm);
+        const bool drawFailure = containsPageDrawFailure(errMsg);
+
+        std::cout << "[INFO] GS attempt=" << attempt
+                  << " exitCode=" << status
+                  << " outputBytes=" << outputSize
+                  << " stderrTail=" << (errTail.empty() ? "<empty>" : errTail)
+                  << std::endl;
+
+        if (status != 0 || drawFailure) {
+            std::ostringstream reason;
+            reason << "Ghostscript rasterization failed at " << xDpi << "x" << yDpi << " DPI"
+                   << " (attempt " << attempt << ")"
+                   << ", exitCode=" << status;
+            if (drawFailure) {
+                reason << ", detected page draw failure signature in stderr"
+                       << " (e.g. 'Page drawing error occurred / Could not draw this page at all').";
+            }
+            if (!errTail.empty()) {
+                reason << " stderrTail=" << errTail;
+            }
+            failureReason = reason.str();
+
+            std::remove(stderrFile.c_str());
+            std::remove(tempPgm.c_str());
+            break;
+        }
+
+        try {
+            RasterFileInfo info = parsePGMHeader(tempPgm);
+            info.pageNumber = params.pageNumber > 0 ? params.pageNumber : 1;
+            info.fileSizeBytes = static_cast<size_t>(outputSize);
+
+            std::remove(stderrFile.c_str());
+            finalTempPgm = tempPgm;
+
+            std::cout << "[INFO] Rasterized to " << finalTempPgm
+                      << " (" << info.width << "x" << info.height
+                      << ", " << (info.fileSizeBytes / (1024 * 1024)) << " MB on disk)"
+                      << std::endl;
+            std::cout << "[INFO] Effective DPI: " << xDpi << "x" << yDpi << std::endl;
+            return info;
+        } catch (const std::exception& e) {
+            const uintmax_t recheckSize = safeFileSize(tempPgm);
+            std::ostringstream reason;
+            reason << "PGM validation failed after successful Ghostscript run"
+                   << " (attempt " << attempt << ")"
+                   << ", outputBytes=" << recheckSize
+                   << ", reason=" << e.what();
+            if (!errTail.empty()) {
+                reason << ", stderrTail=" << errTail;
+            }
+            failureReason = reason.str();
+
+            std::cout << "[ERROR] " << failureReason << std::endl;
+
+            std::remove(stderrFile.c_str());
+            std::remove(tempPgm.c_str());
+
+            // Guarded same-DPI retry for suspected transient write/read races.
+            if (attempt == 1) {
+                std::cout << "[WARN] Retrying Ghostscript once at same DPI due to validation failure" << std::endl;
+                continue;
+            }
+            break;
+        }
     }
-    std::remove(stderrFile.c_str());
 
-    RasterFileInfo info = parsePGMHeader(tempPgm);
-    info.pageNumber = params.pageNumber > 0 ? params.pageNumber : 1;
-
-    struct stat st;
-    if (stat(tempPgm.c_str(), &st) == 0) {
-        info.fileSizeBytes = st.st_size;
+    if (failureReason.empty()) {
+        failureReason = "Ghostscript rasterization failed for unknown reason";
     }
-
-    std::cout << "[INFO] Rasterized to " << tempPgm
-              << " (" << info.width << "x" << info.height
-              << ", " << (info.fileSizeBytes / (1024 * 1024)) << " MB on disk)"
-              << std::endl;
-    std::cout << "[INFO] Effective DPI: " << xDpi << "x" << yDpi << std::endl;
-
-    return info;
+    throw RasterizationException(failureReason + ". Aborting before bilevel conversion.");
 }
 
 
@@ -832,7 +938,6 @@ RasterFileInfo PDFRasterizer::parsePGMHeader(const std::string& filePath) {
         throw RasterizationException("Failed to open PGM file: " + filePath);
     }
 
-    // Read magic number
     char magic[3] = {};
     file.read(magic, 2);
     if (magic[0] != 'P' || magic[1] != '5') {
@@ -840,14 +945,12 @@ RasterFileInfo PDFRasterizer::parsePGMHeader(const std::string& filePath) {
             std::string(magic, 2) + ")");
     }
 
-    // Helper: skip whitespace and comments
     auto skipWsAndComments = [&file]() {
         while (file) {
             int c = file.peek();
             if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
                 file.get();
             } else if (c == '#') {
-                // Skip comment line
                 while (file && file.get() != '\n') {}
             } else {
                 break;
@@ -858,14 +961,17 @@ RasterFileInfo PDFRasterizer::parsePGMHeader(const std::string& filePath) {
     auto readInt = [&file, &skipWsAndComments]() -> int {
         skipWsAndComments();
         int val = 0;
+        bool gotDigit = false;
         while (file) {
             int c = file.peek();
             if (c >= '0' && c <= '9') {
+                gotDigit = true;
                 val = val * 10 + (file.get() - '0');
             } else {
                 break;
             }
         }
+        if (!gotDigit) return 0;
         return val;
     };
 
@@ -873,7 +979,7 @@ RasterFileInfo PDFRasterizer::parsePGMHeader(const std::string& filePath) {
     info.height = readInt();
     int maxVal = readInt();
 
-    if (info.width == 0 || info.height == 0) {
+    if (info.width <= 0 || info.height <= 0) {
         throw RasterizationException("Invalid PGM dimensions: " +
             std::to_string(info.width) + "x" + std::to_string(info.height));
     }
@@ -882,9 +988,32 @@ RasterFileInfo PDFRasterizer::parsePGMHeader(const std::string& filePath) {
             std::to_string(maxVal) + " (expected 255)");
     }
 
-    // Single whitespace char after maxval, then binary data begins
-    file.get();
-    info.dataOffset = file.tellg();
+    int delim = file.get();
+    if (delim == EOF) {
+        throw RasterizationException("PGM header ended unexpectedly before pixel data");
+    }
+    info.dataOffset = static_cast<size_t>(file.tellg());
+
+    struct stat st;
+    if (stat(filePath.c_str(), &st) != 0) {
+        throw RasterizationException("Failed to stat PGM file for size validation: " + filePath);
+    }
+    info.fileSizeBytes = static_cast<size_t>(st.st_size);
+
+    const uint64_t expectedDataBytes = static_cast<uint64_t>(info.width) * static_cast<uint64_t>(info.height);
+    const uint64_t expectedTotalBytes = static_cast<uint64_t>(info.dataOffset) + expectedDataBytes;
+    const uint64_t actualBytes = static_cast<uint64_t>(info.fileSizeBytes);
+
+    if (actualBytes < expectedTotalBytes) {
+        std::ostringstream oss;
+        oss << "Truncated PGM raster output: actualBytes=" << actualBytes
+            << ", expectedTotalBytes=" << expectedTotalBytes
+            << ", headerBytes=" << info.dataOffset
+            << ", expectedPixelBytes=" << expectedDataBytes
+            << ", width=" << info.width
+            << ", height=" << info.height;
+        throw RasterizationException(oss.str());
+    }
 
     return info;
 }
