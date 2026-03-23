@@ -81,7 +81,7 @@ int main(int argc, char* argv[]) {
             forceFastMono = !(s.empty() || s == "0" || s == "false" || s == "no" || s == "off");
         }
 
-        bool useTrueCmyk = false;
+        bool useTrueCmyk = args.cmyk;
         if (const char* v = std::getenv("USE_TRUE_CMYK")) {
             std::string s = v;
             std::transform(s.begin(), s.end(), s.begin(), ::tolower);

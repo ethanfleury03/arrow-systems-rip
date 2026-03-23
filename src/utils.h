@@ -21,7 +21,7 @@ struct CommandLineArgs {
     bool verbose = false;
     int pageNumber = 0;  // 0 = all pages
     std::string paperSize = "a4";
-    bool cmyk = true;
+    bool cmyk = false;
     bool legacyJsl = false;
     int verifyTimeoutSec = 45;
     std::string gymeaLogPath = "/var/log/gymea/gymea.log";
