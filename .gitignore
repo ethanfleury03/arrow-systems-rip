@@ -42,3 +42,13 @@ logs/
 # Keep important text files if needed:
 !README.txt
 !CHANGELOG.txt
+captures/
+*.pcap
+*.pcapng
+*.dll
+*.lib
+*.a
+*.so
+*.bak
+*.bak_*
+*.corrupted_python_backup
