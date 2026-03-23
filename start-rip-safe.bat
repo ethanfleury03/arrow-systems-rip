@@ -61,12 +61,23 @@ echo [INFO] Starting RIP...
 REM ===== Start RIP =====
 set "RIP_EXE="
 
+REM Ensure runtime DLL folder is available first (fixes 0xC0000135 missing dependency errors)
+if exist "%~dp0vendor\runtime\jsl" set "PATH=%~dp0vendor\runtime\jsl;%PATH%"
+
 REM Keep lookup order explicit; chained IF forms can misparse in cmd when invoked via call .\script.bat.
+if exist "C:\Users\Arrow\Arrow-Rip\src\build\Release\memjet-rip.exe" set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\src\build\Release\memjet-rip.exe"
+if defined RIP_EXE goto rip_exe_resolved
+if exist "C:\Users\Arrow\Arrow-Rip\src\build\release\memjet-rip.exe" set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\src\build\release\memjet-rip.exe"
+if defined RIP_EXE goto rip_exe_resolved
 if exist "C:\Users\Arrow\Arrow-Rip\build\release\memjet-rip.exe" set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\build\release\memjet-rip.exe"
 if defined RIP_EXE goto rip_exe_resolved
 if exist "C:\Users\Arrow\Arrow-Rip\build\Release\memjet-rip.exe" set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\build\Release\memjet-rip.exe"
 if defined RIP_EXE goto rip_exe_resolved
 if exist "C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe" set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe"
+if defined RIP_EXE goto rip_exe_resolved
+if exist "%~dp0src\build\Release\memjet-rip.exe" set "RIP_EXE=%~dp0src\build\Release\memjet-rip.exe"
+if defined RIP_EXE goto rip_exe_resolved
+if exist "%~dp0src\build\release\memjet-rip.exe" set "RIP_EXE=%~dp0src\build\release\memjet-rip.exe"
 if defined RIP_EXE goto rip_exe_resolved
 if exist "%~dp0build\release\memjet-rip.exe" set "RIP_EXE=%~dp0build\release\memjet-rip.exe"
 if defined RIP_EXE goto rip_exe_resolved
