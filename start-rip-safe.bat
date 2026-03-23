@@ -53,15 +53,21 @@ echo [INFO] RIP_TEMP_DIR=%RIP_TEMP_DIR%
 echo [INFO] Starting RIP...
 
 REM ===== Start RIP =====
-set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe"
-if not exist "%RIP_EXE%" (
-  REM Canonical build output path is C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe; allow repo-local fallback.
-  set "RIP_EXE=%~dp0build\memjet-rip.exe"
-)
+set "RIP_EXE="
+if exist "C:\Users\Arrow\Arrow-Rip\build\release\memjet-rip.exe" set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\build\release\memjet-rip.exe"
+if not defined RIP_EXE if exist "C:\Users\Arrow\Arrow-Rip\build\Release\memjet-rip.exe" set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\build\Release\memjet-rip.exe"
+if not defined RIP_EXE if exist "C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe" set "RIP_EXE=C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe"
+if not defined RIP_EXE if exist "%~dp0build\release\memjet-rip.exe" set "RIP_EXE=%~dp0build\release\memjet-rip.exe"
+if not defined RIP_EXE if exist "%~dp0build\Release\memjet-rip.exe" set "RIP_EXE=%~dp0build\Release\memjet-rip.exe"
+if not defined RIP_EXE if exist "%~dp0build\memjet-rip.exe" set "RIP_EXE=%~dp0build\memjet-rip.exe"
 
-if not exist "%RIP_EXE%" (
+if not defined RIP_EXE (
   echo [ERROR] RIP executable not found. Checked:
+  echo [ERROR]   C:\Users\Arrow\Arrow-Rip\build\release\memjet-rip.exe
+  echo [ERROR]   C:\Users\Arrow\Arrow-Rip\build\Release\memjet-rip.exe
   echo [ERROR]   C:\Users\Arrow\Arrow-Rip\build\memjet-rip.exe
+  echo [ERROR]   %~dp0build\release\memjet-rip.exe
+  echo [ERROR]   %~dp0build\Release\memjet-rip.exe
   echo [ERROR]   %~dp0build\memjet-rip.exe
   exit /b 1
 )
