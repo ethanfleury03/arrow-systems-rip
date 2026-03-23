@@ -1,0 +1,66 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<jslConfig xmlns="JslConfigSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="JslConfig.xsd">
+  <!-- OEM R8.0.0-based config with concrete printer destination -->
+  <printModes>
+    <printMode index="1">
+      <modeDescription>
+        Mode 1 is used for DuraLink systems with Arsenal printheads.
+      </modeDescription>
+      <verticalResolution res="1585">
+        <printSpeedNumerator>1600</printSpeedNumerator>
+        <printSpeedDenominator>317</printSpeedDenominator>
+        <ccuIoMap5>01 02 04 08 16</ccuIoMap5>
+        <fastMonoSpeed>5</fastMonoSpeed>
+      </verticalResolution>
+      <verticalResolution res="1260">
+        <printSpeedNumerator>400</printSpeedNumerator>
+        <printSpeedDenominator>63</printSpeedDenominator>
+        <ccuIoMap5>01 02 04 08 16</ccuIoMap5>
+        <fastMonoSpeed>5</fastMonoSpeed>
+      </verticalResolution>
+      <verticalResolution res="790">
+        <printSpeedNumerator>800</printSpeedNumerator>
+        <printSpeedDenominator>79</printSpeedDenominator>
+        <ccuIoMap5>01 02 04 08 16</ccuIoMap5>
+        <fastMonoSpeed>5</fastMonoSpeed>
+      </verticalResolution>
+      <verticalResolution res="580">
+        <printSpeedNumerator>400</printSpeedNumerator>
+        <printSpeedDenominator>29</printSpeedDenominator>
+        <ccuIoMap5>01 02 04 08 16</ccuIoMap5>
+        <fastMonoSpeed>5</fastMonoSpeed>
+      </verticalResolution>
+    </printMode>
+    <printMode index="2">
+      <modeDescription>
+        Mode 2 is used for DuraFlex systems with Thunderbolt printheads.
+      </modeDescription>
+      <verticalResolution res="1600">
+        <printSpeedNumerator>2</printSpeedNumerator>
+        <printSpeedDenominator>1</printSpeedDenominator>
+        <ccuIoMap5>01 02 04 08 16</ccuIoMap5>
+        <fastQuadcolorMode>1</fastQuadcolorMode>
+      </verticalResolution>
+      <verticalResolution res="954">
+        <printSpeedNumerator>1600</printSpeedNumerator>
+        <printSpeedDenominator>477</printSpeedDenominator>
+        <ccuIoMap5>01 02 04 08 16</ccuIoMap5>
+        <fastQuadcolorMode>1</fastQuadcolorMode>
+      </verticalResolution>
+    </printMode>
+  </printModes>
+  <chunkSizeBytes>4194304</chunkSizeBytes>
+  <printheadModules>
+    <engineStage number="1">
+      <strip number="1">
+        <!-- Match your runtime job color order: M K C Y -->
+        <printheadModule color="JSLIB_MAGENTA JSLIB_BLACK JSLIB_CYAN JSLIB_YELLOW">
+          <socket type="primary">
+            <hostAddress>192.168.111.1</hostAddress>
+            <port>9100</port>
+          </socket>
+        </printheadModule>
+      </strip>
+    </engineStage>
+  </printheadModules>
+</jslConfig>

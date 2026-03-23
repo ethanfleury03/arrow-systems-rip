@@ -1,0 +1,44 @@
+# --- OS / Editor ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+*.swp
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# --- Node ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Build / temp ---
+build/
+dist/
+out/
+tmp/
+temp/
+*.tmp
+*.bak
+*.old
+
+# --- Logs / runtime data ---
+logs/
+*.log
+*.pid
+
+# --- Your request: ignore text dumps ---
+*.txt
+
+# Keep important text files if needed:
+!README.txt
+!CHANGELOG.txt
