@@ -35,6 +35,7 @@ set RIP_FREE_BYTES_RAW=
 for /f "tokens=2 delims=:" %%A in ('fsutil volume diskfree %RIP_DRIVE% ^| findstr /I /C:"Total free bytes"') do (
   for /f "tokens=*" %%B in ("%%A") do set "RIP_FREE_BYTES_RAW=%%B"
 )
+for /f "tokens=1" %%C in ("%RIP_FREE_BYTES_RAW%") do set "RIP_FREE_BYTES_RAW=%%C"
 set "RIP_FREE_BYTES=%RIP_FREE_BYTES_RAW:,=%"
 if not defined RIP_FREE_BYTES (
   echo [ERROR] Could not determine free space on %RIP_DRIVE%.
