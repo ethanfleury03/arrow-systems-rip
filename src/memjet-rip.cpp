@@ -74,22 +74,36 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        bool forceFastMono = false;
-        if (const char* v = std::getenv("USE_FAST_MONO")) {
-            std::string s = v;
-            std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-            forceFastMono = !(s.empty() || s == "0" || s == "false" || s == "no" || s == "off");
-        }
+        auto parseEnvBool = [](const char* name, bool fallback, bool* wasSet = nullptr) {
+            if (const char* v = std::getenv(name)) {
+                if (wasSet) *wasSet = true;
+                std::string s = v;
+                std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+                return !(s.empty() || s == "0" || s == "false" || s == "no" || s == "off");
+            }
+            if (wasSet) *wasSet = false;
+            return fallback;
+        };
 
-        bool useTrueCmyk = args.cmyk;
-        if (const char* v = std::getenv("USE_TRUE_CMYK")) {
-            std::string s = v;
-            std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-            useTrueCmyk = !(s.empty() || s == "0" || s == "false" || s == "no" || s == "off");
-        }
+        const bool forceFastMono = parseEnvBool("USE_FAST_MONO", false, nullptr);
+
+        bool envTrueCmykSet = false;
+        bool useTrueCmyk = parseEnvBool("USE_TRUE_CMYK", args.cmyk, &envTrueCmykSet);
+
+        std::string modeReason;
         if (forceFastMono) {
             useTrueCmyk = false;
+            modeReason = "mono forced by USE_FAST_MONO";
+        } else if (envTrueCmykSet) {
+            modeReason = std::string("USE_TRUE_CMYK=") + (useTrueCmyk ? "1" : "0");
+        } else {
+            modeReason = args.cmyk
+                ? "CLI default/--cmyk (color default)"
+                : "CLI --gray/--mono override";
         }
+
+        logInfo("Render mode selected: " + std::string(useTrueCmyk ? "CMYK_COLOR" : "MONO") +
+                " [reason=" + modeReason + "]");
 
         auto readEnvDouble = [](const char* name, double defVal) {
             if (const char* v = std::getenv(name)) {
@@ -189,7 +203,7 @@ int main(int argc, char* argv[]) {
             logInfo("Rasterized CMYK " + std::to_string(rasterInfo.width) + "x" +
                     std::to_string(rasterInfo.height) + " pixels");
         } else {
-            logInfo("Step 1: Rasterizing PDF to disk PGM...");
+            logInfo("Step 1: Rasterizing PDF to disk PGM (mono override active)...");
             rasterInfo = rasterizer.rasterizeToFile(args.inputPdf, rasterParams);
             tempGuard.reset(new TempFileGuard(rasterInfo.filePath));
             logInfo("Rasterized " + std::to_string(rasterInfo.width) + "x" +
@@ -210,6 +224,17 @@ int main(int argc, char* argv[]) {
                 ColorPlane::BLACK,
                 ColorPlane::YELLOW
               };
+
+        {
+            std::ostringstream planeMsg;
+            planeMsg << "Plane processing plan: " << planeColors.size() << " plane(s) [";
+            for (size_t i = 0; i < planeColors.size(); ++i) {
+                if (i) planeMsg << ", ";
+                planeMsg << colorName(planeColors[i]);
+            }
+            planeMsg << "]";
+            logInfo(planeMsg.str());
+        }
 
         std::vector<PageData> planes;
 

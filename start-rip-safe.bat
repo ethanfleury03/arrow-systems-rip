@@ -16,6 +16,10 @@ set RIP_TEMP_SAFETY_MULTIPLIER=1.5
 set RIP_TEMP_MIN_FREE_BYTES=0
 set RIP_TEMP_VERBOSE=1
 
+REM Color/mono defaults: default to CMYK unless explicitly overridden by caller.
+if not defined USE_TRUE_CMYK set USE_TRUE_CMYK=1
+if not defined USE_FAST_MONO set USE_FAST_MONO=0
+
 REM ===== Mount checks =====
 if not exist "%RIP_DRIVE%\" (
   echo [ERROR] %RIP_DRIVE% not mounted. Plug in storage and retry.
@@ -50,6 +54,8 @@ powershell -NoProfile -Command "$free=[int64]%RIP_FREE_BYTES%; $required=[int64]
 if errorlevel 1 exit /b 1
 
 echo [INFO] RIP_TEMP_DIR=%RIP_TEMP_DIR%
+echo [INFO] USE_TRUE_CMYK=%USE_TRUE_CMYK%
+echo [INFO] USE_FAST_MONO=%USE_FAST_MONO%
 echo [INFO] Starting RIP...
 
 REM ===== Start RIP =====

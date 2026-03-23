@@ -66,17 +66,27 @@ Expected behavior:
 - Completion succeeds on required Gymea completion signals.
 - Timeout now acts as guardrail; failures indicate explicit reason (stall/fault/cancel/hard-timeout).
 
-## 1600-DPI Ghostscript fail-fast validation (Ethan)
+## Default color behavior + mono override validation (Ethan)
 
 Run from `C:\Users\Arrow\Arrow-Rip`:
 
 ```bat
-set USE_TRUE_CMYK=0
+REM 1) DEFAULT path (CMYK color, no color flag required)
 set USE_FAST_MONO=0
+set USE_TRUE_CMYK=1
+build\Release\memjet-rip.exe -i C:\print\ethan-problem.pdf --dry-run --dpi 1600 -v
+
+REM 2) Explicit mono override via CLI
+build\Release\memjet-rip.exe -i C:\print\ethan-problem.pdf --dry-run --dpi 1600 --gray -v
+
+REM 3) Explicit mono override via env
+set USE_FAST_MONO=1
 build\Release\memjet-rip.exe -i C:\print\ethan-problem.pdf --dry-run --dpi 1600 -v
 ```
 
 Expected behavior:
+- Default run logs `Render mode selected: CMYK_COLOR` and `Plane processing plan: 4 plane(s) [Magenta, Cyan, Black, Yellow]`.
+- Mono only happens when explicitly requested (`--gray/--mono` or `USE_FAST_MONO=1`).
 - RIP stays at 1600 DPI (no automatic fallback to lower DPI).
 - If Ghostscript exits non-zero OR stderr includes page draw failure signatures, RIP aborts immediately before bilevel conversion.
 - If PGM is truncated/partial, RIP reports exact `actualBytes` vs `expectedTotalBytes` and aborts.

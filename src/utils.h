@@ -21,7 +21,7 @@ struct CommandLineArgs {
     bool verbose = false;
     int pageNumber = 0;  // 0 = all pages
     std::string paperSize = "a4";
-    bool cmyk = false;
+    bool cmyk = true;
     bool legacyJsl = false;
     int verifyTimeoutSec = 45;
     bool verifyTimeoutExplicit = false;
