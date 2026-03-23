@@ -32,13 +32,15 @@ enum class PesEngineState {
 enum class SessionPhase {
     IDLE,
     DATA_SUBMITTING,
+    TX_DONE,
     WAITING_QUEUE,
     PREPARING,
     WAITING_PRINT_READY,
     STARTING,
-    PRINTING,
+    WAIT_PRINT_COMPLETE,
     FINISHING,
-    COMPLETE,
+    WAIT_JOB_DONE,
+    SUCCESS,
     FAILED
 };
 

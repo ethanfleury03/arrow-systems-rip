@@ -108,7 +108,33 @@ namespace {
         }
         return cmd.str();
     }
+
+    int getEnvIntOrDefault(const char* key, int fallback) {
+        const char* v = std::getenv(key);
+        if (!v || std::strlen(v) == 0) return fallback;
+        int parsed = std::atoi(v);
+        return parsed > 0 ? parsed : fallback;
+    }
+
+    const char* phaseToString(SessionPhase phase) {
+        switch (phase) {
+            case SessionPhase::IDLE: return "IDLE";
+            case SessionPhase::DATA_SUBMITTING: return "DATA_SUBMITTING";
+            case SessionPhase::TX_DONE: return "TX_DONE";
+            case SessionPhase::WAITING_QUEUE: return "WAITING_QUEUE";
+            case SessionPhase::PREPARING: return "PREPARING";
+            case SessionPhase::WAITING_PRINT_READY: return "WAITING_PRINT_READY";
+            case SessionPhase::STARTING: return "STARTING";
+            case SessionPhase::WAIT_PRINT_COMPLETE: return "WAIT_PRINT_COMPLETE";
+            case SessionPhase::FINISHING: return "FINISHING";
+            case SessionPhase::WAIT_JOB_DONE: return "WAIT_JOB_DONE";
+            case SessionPhase::SUCCESS: return "SUCCESS";
+            case SessionPhase::FAILED: return "FAILED";
+            default: return "UNKNOWN_PHASE";
+        }
+    }
 }
+
 
 void PesOrchestrator::logOrchestrationStep(const std::string& step, const std::string& stateBefore,
                                            const std::string& stateAfter, bool isReadyForPrintData,
@@ -822,15 +848,17 @@ bool PesOrchestrator::waitIdleAfterFinish(int timeoutMs) {
         
         std::string stateBefore = stateToString(st.state);
         
-        // Check idle: PRIMED_IDLE or DEPRIMED_IDLE
-        bool idle = (st.state == PesEngineState::PRIMED_IDLE) ||
-                    (st.state == PesEngineState::DEPRIMED_IDLE) ||
-                    (st.state == PesEngineState::PRINT_READY) ||
-                    (!stateAfter.empty() && (stateAfter == "PRIMED_IDLE" || stateAfter == "DEPRIMED_IDLE" || stateAfter == "PRINT_READY"));
+        // Terminal ack requires an idle/ready state and an empty queue.
+        bool terminalState = (st.state == PesEngineState::PRIMED_IDLE) ||
+                             (st.state == PesEngineState::DEPRIMED_IDLE) ||
+                             (st.state == PesEngineState::PRINT_READY) ||
+                             (!stateAfter.empty() && (stateAfter == "PRIMED_IDLE" || stateAfter == "DEPRIMED_IDLE" || stateAfter == "PRINT_READY"));
+        bool idle = terminalState && (st.queueLen == 0);
         
         logOrchestrationStep("wait_idle_after_finish", stateBefore, stateAfter,
                             st.isReadyForPrintData, st.queueLen,
-                            idle ? "OK" : "WAITING", "", elapsed);
+                            idle ? "OK" : "WAITING",
+                            (!terminalState ? "WAIT_TERMINAL_STATE" : "WAIT_QUEUE_DRAIN"), elapsed);
         
         if (idle) {
             return true;
@@ -1260,24 +1288,36 @@ bool PesOrchestrator::runPrintSession(JSLWrapper& jsl,
     // JSL lifecycle: jslibCloseJob always called
     jsl.closeJob(handle);
     handleOpen = false;
+    phase_ = SessionPhase::TX_DONE;
     PesStatus afterClose = getStatus();
     std::string afterCloseStateAfter = extractAndNormalizeState(afterClose);
+    logOrchestrationStep("phase_transition", "DATA_SUBMITTING", phaseToString(phase_),
+                        afterClose.isReadyForPrintData, afterClose.queueLen,
+                        "OK", "JSL_TRANSFER_COMPLETED", submitMs);
     logOrchestrationStep("jsl_close_job", afterCloseStateAfter, afterCloseStateAfter,
                         afterClose.isReadyForPrintData, afterClose.queueLen,
                         "OK", "", 0);
-    
+
+    const int queueTimeoutMs = getEnvIntOrDefault("PES_QUEUE_TIMEOUT_MS", 30000);
+    const int printCompleteTimeoutMs = getEnvIntOrDefault("PES_PRINT_COMPLETE_TIMEOUT_MS", 60000);
+    const int jobDoneTimeoutMs = getEnvIntOrDefault("PES_JOB_DONE_TIMEOUT_MS", 30000);
+
     // GATE 3: hard queue gate AFTER closeJob
     phase_ = SessionPhase::WAITING_QUEUE;
-    if (!waitJobQueuedAfterSubmit(30000)) {
+    logOrchestrationStep("phase_transition", "TX_DONE", phaseToString(phase_),
+                        afterClose.isReadyForPrintData, afterClose.queueLen,
+                        "OK", "", queueTimeoutMs);
+    if (!waitJobQueuedAfterSubmit(queueTimeoutMs)) {
         return cleanup("Queue not ready within timeout after closeJob");
     }
-
-
 
     // GATE 5: strict prepare guard
     phase_ = SessionPhase::PREPARING;
     PesStatus beforePrepare = getStatus();
     std::string beforePrepareStateAfter = extractAndNormalizeState(beforePrepare);
+    logOrchestrationStep("phase_transition", "WAITING_QUEUE", phaseToString(phase_),
+                        beforePrepare.isReadyForPrintData, beforePrepare.queueLen,
+                        "OK", "", 0);
 
     if ((beforePrepare.state != PesEngineState::PRIMED_IDLE) &&
         (beforePrepare.state != PesEngineState::PRINT_READY) &&
@@ -1322,14 +1362,18 @@ bool PesOrchestrator::runPrintSession(JSLWrapper& jsl,
                         startTransitionVisible ? "OK" : "WARN",
                         startTransitionVisible ? "" : "START_PRINT_NO_IMMEDIATE_ACTIVE_TRANSITION", 0);
 
-    // GATE 8: Wait SESSION_COMPLETE after start
-    if (!waitSessionCompleteAfterStart(60000)) {
+    // GATE 8: Wait print completion ack after start
+    phase_ = SessionPhase::WAIT_PRINT_COMPLETE;
+    logOrchestrationStep("phase_transition", "STARTING", phaseToString(phase_),
+                        startAccepted.isReadyForPrintData, startAccepted.queueLen,
+                        "OK", "", printCompleteTimeoutMs);
+    if (!waitSessionCompleteAfterStart(printCompleteTimeoutMs)) {
         guardedFinish();
         PesStatus timeoutSt = getStatus();
         std::string timeoutStateAfter = extractAndNormalizeState(timeoutSt);
         logOrchestrationStep("wait_session_complete_timeout", timeoutStateAfter, timeoutStateAfter,
                             timeoutSt.isReadyForPrintData, timeoutSt.queueLen,
-                            "TIMEOUT", "SESSION_COMPLETE_TIMEOUT", 60000);
+                            "TIMEOUT", "SESSION_COMPLETE_TIMEOUT", printCompleteTimeoutMs);
         return false;
     }
     
@@ -1352,15 +1396,28 @@ bool PesOrchestrator::runPrintSession(JSLWrapper& jsl,
                             "SKIP", "PES_CALL_FINISH_DISABLED", 0);
     }
 
-    // GATE 9: Wait idle/ready after start-or-finish
-    waitIdleAfterFinish(30000);  // Best-effort, don't fail if timeout
+    // GATE 10: terminal print completion (idle/ready + queue drained)
+    phase_ = SessionPhase::WAIT_JOB_DONE;
+    PesStatus beforeDoneWait = getStatus();
+    std::string beforeDoneStateAfter = extractAndNormalizeState(beforeDoneWait);
+    logOrchestrationStep("phase_transition", "FINISHING", phaseToString(phase_),
+                        beforeDoneWait.isReadyForPrintData, beforeDoneWait.queueLen,
+                        "OK", "", jobDoneTimeoutMs);
+    if (!waitIdleAfterFinish(jobDoneTimeoutMs)) {
+        PesStatus timeoutSt = getStatus();
+        std::string timeoutStateAfter = extractAndNormalizeState(timeoutSt);
+        logOrchestrationStep("wait_job_done_timeout", beforeDoneStateAfter, timeoutStateAfter,
+                            timeoutSt.isReadyForPrintData, timeoutSt.queueLen,
+                            "TIMEOUT", "TERMINAL_PRINT_ACK_TIMEOUT", jobDoneTimeoutMs);
+        return cleanup("Timed out waiting for terminal print completion state");
+    }
     
-    phase_ = SessionPhase::COMPLETE;
+    phase_ = SessionPhase::SUCCESS;
     PesStatus finalCompleteSt = getStatus();
     std::string finalCompleteStateAfter = extractAndNormalizeState(finalCompleteSt);
     logOrchestrationStep("session_complete", finalCompleteStateAfter, finalCompleteStateAfter,
                         finalCompleteSt.isReadyForPrintData, finalCompleteSt.queueLen,
-                        "OK", "", 0);
+                        "OK", "PRINT_COMPLETION_ACKED", 0);
     return true;
 }
 
