@@ -31,15 +31,20 @@ if not exist "%RIP_ROOT%\failed" mkdir "%RIP_ROOT%\failed"
 
 REM ===== Free-space check =====
 set "RIP_FREE_BYTES_RAW="
-for /f "tokens=2 delims=:" %%A in ('fsutil volume diskfree %RIP_DRIVE% ^| findstr /I /C:"Total free bytes"') do set "RIP_FREE_BYTES_RAW=%%A"
+for /f "tokens=2 delims=:" %%A in ('fsutil volume diskfree %RIP_DRIVE% ^| findstr /I /C:"Total free bytes"') do (
+  for /f "tokens=1" %%B in ("%%A") do set "RIP_FREE_BYTES_RAW=%%B"
+)
 
 if not defined RIP_FREE_BYTES_RAW (
   echo [ERROR] Could not parse free space from fsutil for %RIP_DRIVE%.
   exit /b 1
 )
 
-set "RIP_FREE_BYTES=%RIP_FREE_BYTES_RAW: =%"
-set "RIP_FREE_BYTES=%RIP_FREE_BYTES:,=%"
+set "RIP_FREE_BYTES=%RIP_FREE_BYTES_RAW:,=%"
+echo(%RIP_FREE_BYTES%| findstr /R "^[0-9][0-9]*$" >nul || (
+  echo [ERROR] Could not parse free space from fsutil for %RIP_DRIVE%.
+  exit /b 1
+)
 
 powershell -NoProfile -Command ^
 "$free=[int64]$env:RIP_FREE_BYTES; $required=[int64]$env:RIP_MIN_FREE_GB*1GB; $freeGb=[math]::Round($free/1GB,2); $requiredGb=[math]::Round($required/1GB,2); if($free -lt $required){Write-Host ('[ERROR] Low space on %RIP_DRIVE%: ' + $freeGb + ' GB free (need >= ' + $requiredGb + ' GB)'); exit 1}else{Write-Host ('[OK] %RIP_DRIVE% free: ' + $freeGb + ' GB (required >= ' + $requiredGb + ' GB)')}"
