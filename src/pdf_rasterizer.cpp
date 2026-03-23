@@ -11,29 +11,68 @@
 #include <sys/stat.h>
 #include <chrono>
 #include <cstdio>
-#include <filesystem>
-#include <system_error>
 #include <cctype>
+#include <cerrno>
+#include <ctime>
 #ifdef _WIN32
 #include <process.h>
+#include <windows.h>
+#include <io.h>
 #else
 #include <unistd.h>
+#include <dirent.h>
+#include <sys/statvfs.h>
 #endif
 
 namespace memjet {
 namespace {
-namespace fs = std::filesystem;
+
+std::string baseName(const std::string& path) {
+    const size_t pos = path.find_last_of("/\\");
+    return (pos == std::string::npos) ? path : path.substr(pos + 1);
+}
+
+std::string joinPath(const std::string& dir, const std::string& name) {
+    if (dir.empty()) return name;
+    const char last = dir.back();
+    if (last == '/' || last == '\\') return dir + name;
+#ifdef _WIN32
+    return dir + "\\" + name;
+#else
+    return dir + "/" + name;
+#endif
+}
+
+uintmax_t safeFileSize(const std::string& path) {
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) return 0;
+    return static_cast<uintmax_t>(st.st_size);
+}
+
+std::time_t fileMTime(const std::string& path, bool* ok = nullptr) {
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) {
+        if (ok) *ok = false;
+        return 0;
+    }
+    if (ok) *ok = true;
+    return st.st_mtime;
+}
+
+bool removeFile(const std::string& path) {
+    return std::remove(path.c_str()) == 0;
+}
 
 std::string getTempDirPath() {
     if (const char* env = std::getenv("RIP_TEMP_DIR")) {
         if (*env) return std::string(env);
     }
-    std::error_code ec;
-    fs::path p = fs::temp_directory_path(ec);
-    if (!ec && !p.empty()) return p.string();
 #ifdef _WIN32
+    if (const char* env = std::getenv("TEMP")) if (*env) return std::string(env);
+    if (const char* env = std::getenv("TMP")) if (*env) return std::string(env);
     return "C:/Windows/Temp";
 #else
+    if (const char* env = std::getenv("TMPDIR")) if (*env) return std::string(env);
     return "/tmp";
 #endif
 }
@@ -62,8 +101,8 @@ long long envLongLong(const char* name, long long defValue) {
     return defValue;
 }
 
-bool shouldCleanupTempFile(const fs::path& p) {
-    const std::string name = p.filename().string();
+bool shouldCleanupTempFile(const std::string& path) {
+    const std::string name = baseName(path);
     const bool ripPam = (name.rfind("rip_", 0) == 0) && (name.find(".pam") != std::string::npos);
     const bool debugPam = (name.rfind("debug_", 0) == 0) && (name.find(".pam") != std::string::npos);
     return ripPam || debugPam;
@@ -77,54 +116,86 @@ struct TempCleanupStats {
     size_t failed = 0;
 };
 
-TempCleanupStats cleanupRipTempArtifacts(const fs::path& dir,
+struct TempFileInfo {
+    std::string path;
+    std::time_t mtime = 0;
+};
+
+std::vector<std::string> listDirectoryFiles(const std::string& dir) {
+    std::vector<std::string> files;
+#ifdef _WIN32
+    const std::string pattern = joinPath(dir, "*");
+    WIN32_FIND_DATAA data;
+    HANDLE hFind = FindFirstFileA(pattern.c_str(), &data);
+    if (hFind == INVALID_HANDLE_VALUE) return files;
+    do {
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+            files.push_back(joinPath(dir, data.cFileName));
+        }
+    } while (FindNextFileA(hFind, &data));
+    FindClose(hFind);
+#else
+    DIR* dp = opendir(dir.c_str());
+    if (!dp) return files;
+    struct dirent* ent = nullptr;
+    while ((ent = readdir(dp)) != nullptr) {
+        if (std::strcmp(ent->d_name, ".") == 0 || std::strcmp(ent->d_name, "..") == 0) continue;
+        std::string p = joinPath(dir, ent->d_name);
+        struct stat st;
+        if (stat(p.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+            files.push_back(p);
+        }
+    }
+    closedir(dp);
+#endif
+    return files;
+}
+
+TempCleanupStats cleanupRipTempArtifacts(const std::string& dir,
                                          int maxAgeHours,
                                          int keepLatest,
                                          bool dryRun,
                                          bool verbose) {
     TempCleanupStats stats;
-    std::vector<std::pair<fs::path, fs::file_time_type>> files;
-    std::error_code ec;
+    std::vector<TempFileInfo> files;
 
-    for (const auto& entry : fs::directory_iterator(dir, ec)) {
-        if (ec) break;
+    for (const auto& path : listDirectoryFiles(dir)) {
         ++stats.scanned;
-        if (!entry.is_regular_file(ec) || ec) continue;
-        const fs::path p = entry.path();
-        if (!shouldCleanupTempFile(p)) continue;
+        if (!shouldCleanupTempFile(path)) continue;
         ++stats.candidates;
-        auto mt = fs::last_write_time(p, ec);
-        if (ec) {
+        bool ok = false;
+        std::time_t mt = fileMTime(path, &ok);
+        if (!ok) {
             ++stats.failed;
             continue;
         }
-        files.push_back({p, mt});
+        TempFileInfo fi;
+        fi.path = path;
+        fi.mtime = mt;
+        files.push_back(fi);
     }
 
-    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) {
-        return a.second > b.second;
+    std::sort(files.begin(), files.end(), [](const TempFileInfo& a, const TempFileInfo& b) {
+        return a.mtime > b.mtime;
     });
 
-    const auto now = fs::file_time_type::clock::now();
-    const auto maxAge = std::chrono::hours(std::max(0, maxAgeHours));
+    const std::time_t now = std::time(nullptr);
+    const long long maxAgeSec = static_cast<long long>(std::max(0, maxAgeHours)) * 3600ll;
 
     for (size_t i = 0; i < files.size(); ++i) {
-        const fs::path& p = files[i].first;
-        const auto mtime = files[i].second;
-        const bool olderThanAge = (maxAgeHours >= 0) ? ((now - mtime) > maxAge) : false;
+        const std::string& path = files[i].path;
+        const bool olderThanAge = (maxAgeHours >= 0) ? ((now - files[i].mtime) > maxAgeSec) : false;
         const bool overKeep = (keepLatest >= 0) ? (static_cast<int>(i) >= keepLatest) : false;
         if (!(olderThanAge || overKeep)) continue;
 
-        uintmax_t sz = fs::file_size(p, ec);
-        if (ec) sz = 0;
-
+        const uintmax_t sz = safeFileSize(path);
         if (dryRun) {
             ++stats.deleted;
             stats.freedBytes += sz;
             continue;
         }
 
-        if (fs::remove(p, ec) && !ec) {
+        if (removeFile(path)) {
             ++stats.deleted;
             stats.freedBytes += sz;
         } else {
@@ -133,7 +204,7 @@ TempCleanupStats cleanupRipTempArtifacts(const fs::path& dir,
     }
 
     if (verbose) {
-        std::cout << "[INFO] Temp cleanup dir=" << dir.string()
+        std::cout << "[INFO] Temp cleanup dir=" << dir
                   << " scanned=" << stats.scanned
                   << " candidates=" << stats.candidates
                   << " deleted=" << stats.deleted
@@ -152,48 +223,59 @@ struct TempSpaceCheck {
     uintmax_t minFreeBytes = 0;
 };
 
-TempSpaceCheck preflightTempSpaceForPam(const fs::path& tempDir,
+uintmax_t getAvailableSpaceBytes(const std::string& dir) {
+#ifdef _WIN32
+    ULARGE_INTEGER freeBytesAvailable;
+    if (!GetDiskFreeSpaceExA(dir.c_str(), &freeBytesAvailable, nullptr, nullptr)) {
+        throw RasterizationException("Failed to query temp free space for " + dir);
+    }
+    return static_cast<uintmax_t>(freeBytesAvailable.QuadPart);
+#else
+    struct statvfs s;
+    if (statvfs(dir.c_str(), &s) != 0) {
+        throw RasterizationException("Failed to query temp free space for " + dir + ": " + std::strerror(errno));
+    }
+    return static_cast<uintmax_t>(s.f_bavail) * static_cast<uintmax_t>(s.f_frsize);
+#endif
+}
+
+TempSpaceCheck preflightTempSpaceForPam(const std::string& tempDir,
                                         int width,
                                         int height,
                                         double safetyMultiplier,
                                         uintmax_t minFreeBytes,
                                         bool verbose) {
-    std::error_code ec;
-    const auto si = fs::space(tempDir, ec);
-    if (ec) {
-        throw RasterizationException("Failed to query temp free space for " + tempDir.string() + ": " + ec.message());
-    }
-
+    const uintmax_t availableBytes = getAvailableSpaceBytes(tempDir);
     const uintmax_t payloadBytes = static_cast<uintmax_t>(width) * static_cast<uintmax_t>(height) * 4ull;
     const uintmax_t withSafety = static_cast<uintmax_t>(static_cast<long double>(payloadBytes) * std::max(1.0, safetyMultiplier));
     const uintmax_t required = withSafety + minFreeBytes;
 
     if (verbose) {
-        std::cout << "[INFO] Temp preflight dir=" << tempDir.string()
+        std::cout << "[INFO] Temp preflight dir=" << tempDir
                   << " width=" << width
                   << " height=" << height
                   << " rawPamBytes=" << payloadBytes
                   << " safetyMultiplier=" << safetyMultiplier
                   << " minFreeBytes=" << minFreeBytes
                   << " requiredBytes=" << required
-                  << " freeBytes=" << si.available
+                  << " freeBytes=" << availableBytes
                   << std::endl;
     }
 
-    if (si.available < required) {
+    if (availableBytes < required) {
         std::ostringstream oss;
         oss << "Insufficient temp space for CMYK raster output. "
             << "requiredBytes=" << required
             << " (rawPamBytes=" << payloadBytes
             << ", safetyMultiplier=" << safetyMultiplier
             << ", minFreeBytes=" << minFreeBytes
-            << "), freeBytes=" << si.available
-            << ", tempPath=" << tempDir.string();
+            << "), freeBytes=" << availableBytes
+            << ", tempPath=" << tempDir;
         throw RasterizationException(oss.str());
     }
 
     TempSpaceCheck out;
-    out.availableBytes = si.available;
+    out.availableBytes = availableBytes;
     out.requiredBytes = required;
     out.minFreeBytes = minFreeBytes;
     return out;
@@ -239,13 +321,6 @@ bool containsPageDrawFailure(const std::string& s) {
     });
     return (lower.find("page drawing error occurred") != std::string::npos) ||
            (lower.find("could not draw this page at all") != std::string::npos);
-}
-
-uintmax_t safeFileSize(const std::string& path) {
-    std::error_code ec;
-    auto sz = fs::file_size(path, ec);
-    if (ec) return 0;
-    return sz;
 }
 
 } // namespace
@@ -616,7 +691,6 @@ CmykRasterData PDFRasterizer::rasterizeToCmykPlanes(const std::string& pdfPath,
     auto us = std::chrono::duration_cast<std::chrono::microseconds>(
         now.time_since_epoch()).count();
     const std::string tempDir = getTempDirPath();
-    const fs::path tempDirPath(tempDir);
 
     std::ostringstream tmpPath;
 #ifdef _WIN32
@@ -735,7 +809,7 @@ CmykRasterData PDFRasterizer::rasterizeToCmykPlanes(const std::string& pdfPath,
         const int maxAgeHours = static_cast<int>(envLongLong("RIP_TEMP_CLEANUP_MAX_AGE_HOURS", 24));
         const int keepLatest = static_cast<int>(envLongLong("RIP_TEMP_CLEANUP_KEEP_LATEST", 20));
         const bool cleanupDryRun = envBool("RIP_TEMP_CLEANUP_DRY_RUN", false);
-        cleanupRipTempArtifacts(tempDirPath, maxAgeHours, keepLatest, cleanupDryRun, tempVerbose);
+        cleanupRipTempArtifacts(tempDir, maxAgeHours, keepLatest, cleanupDryRun, tempVerbose);
     }
 
     int xDpi = params.dpi;
@@ -785,7 +859,7 @@ CmykRasterData PDFRasterizer::rasterizeToCmykPlanes(const std::string& pdfPath,
 
     const double safetyMultiplier = std::max(1.0, envDouble("RIP_TEMP_SAFETY_MULTIPLIER", 1.35));
     const uintmax_t minFreeBytes = static_cast<uintmax_t>(std::max<long long>(0, envLongLong("RIP_TEMP_MIN_FREE_BYTES", 0)));
-    preflightTempSpaceForPam(tempDirPath, estWidth, estHeight, safetyMultiplier, minFreeBytes, tempVerbose);
+    preflightTempSpaceForPam(tempDir, estWidth, estHeight, safetyMultiplier, minFreeBytes, tempVerbose);
 
     if (xDpi == yDpi) {
         cmd << "-r" << xDpi << " ";
