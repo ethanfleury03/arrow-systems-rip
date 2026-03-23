@@ -31,7 +31,7 @@ if not exist "%RIP_ROOT%\failed" mkdir "%RIP_ROOT%\failed"
 
 REM ===== Free-space check =====
 set "RIP_FREE_BYTES_RAW="
-for /f "tokens=4" %%A in ('fsutil volume diskfree %RIP_DRIVE% ^| find "Total free bytes"') do set "RIP_FREE_BYTES_RAW=%%A"
+for /f "tokens=5" %%A in ('fsutil volume diskfree %RIP_DRIVE% ^| find "Total free bytes"') do set "RIP_FREE_BYTES_RAW=%%A"
 set "RIP_FREE_BYTES=%RIP_FREE_BYTES_RAW:,=%"
 
 if not defined RIP_FREE_BYTES (
