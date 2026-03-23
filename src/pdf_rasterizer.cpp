@@ -11,6 +11,8 @@
 #include <sys/stat.h>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
+#include <system_error>
 #ifdef _WIN32
 #include <process.h>
 #else
@@ -18,6 +20,185 @@
 #endif
 
 namespace memjet {
+namespace {
+namespace fs = std::filesystem;
+
+std::string getTempDirPath() {
+    if (const char* env = std::getenv("RIP_TEMP_DIR")) {
+        if (*env) return std::string(env);
+    }
+    std::error_code ec;
+    fs::path p = fs::temp_directory_path(ec);
+    if (!ec && !p.empty()) return p.string();
+#ifdef _WIN32
+    return "C:/Windows/Temp";
+#else
+    return "/tmp";
+#endif
+}
+
+bool envBool(const char* name, bool defValue) {
+    if (const char* v = std::getenv(name)) {
+        std::string s(v);
+        std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+        if (s.empty() || s == "0" || s == "false" || s == "no" || s == "off") return false;
+        return true;
+    }
+    return defValue;
+}
+
+double envDouble(const char* name, double defValue) {
+    if (const char* v = std::getenv(name)) {
+        try { return std::stod(std::string(v)); } catch (...) { return defValue; }
+    }
+    return defValue;
+}
+
+long long envLongLong(const char* name, long long defValue) {
+    if (const char* v = std::getenv(name)) {
+        try { return std::stoll(std::string(v)); } catch (...) { return defValue; }
+    }
+    return defValue;
+}
+
+bool shouldCleanupTempFile(const fs::path& p) {
+    const std::string name = p.filename().string();
+    const bool ripPam = (name.rfind("rip_", 0) == 0) && (name.find(".pam") != std::string::npos);
+    const bool debugPam = (name.rfind("debug_", 0) == 0) && (name.find(".pam") != std::string::npos);
+    return ripPam || debugPam;
+}
+
+struct TempCleanupStats {
+    size_t scanned = 0;
+    size_t candidates = 0;
+    size_t deleted = 0;
+    uintmax_t freedBytes = 0;
+    size_t failed = 0;
+};
+
+TempCleanupStats cleanupRipTempArtifacts(const fs::path& dir,
+                                         int maxAgeHours,
+                                         int keepLatest,
+                                         bool dryRun,
+                                         bool verbose) {
+    TempCleanupStats stats;
+    std::vector<std::pair<fs::path, fs::file_time_type>> files;
+    std::error_code ec;
+
+    for (const auto& entry : fs::directory_iterator(dir, ec)) {
+        if (ec) break;
+        ++stats.scanned;
+        if (!entry.is_regular_file(ec) || ec) continue;
+        const fs::path p = entry.path();
+        if (!shouldCleanupTempFile(p)) continue;
+        ++stats.candidates;
+        auto mt = fs::last_write_time(p, ec);
+        if (ec) {
+            ++stats.failed;
+            continue;
+        }
+        files.push_back({p, mt});
+    }
+
+    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) {
+        return a.second > b.second;
+    });
+
+    const auto now = fs::file_time_type::clock::now();
+    const auto maxAge = std::chrono::hours(std::max(0, maxAgeHours));
+
+    for (size_t i = 0; i < files.size(); ++i) {
+        const fs::path& p = files[i].first;
+        const auto mtime = files[i].second;
+        const bool olderThanAge = (maxAgeHours >= 0) ? ((now - mtime) > maxAge) : false;
+        const bool overKeep = (keepLatest >= 0) ? (static_cast<int>(i) >= keepLatest) : false;
+        if (!(olderThanAge || overKeep)) continue;
+
+        uintmax_t sz = fs::file_size(p, ec);
+        if (ec) sz = 0;
+
+        if (dryRun) {
+            ++stats.deleted;
+            stats.freedBytes += sz;
+            continue;
+        }
+
+        if (fs::remove(p, ec) && !ec) {
+            ++stats.deleted;
+            stats.freedBytes += sz;
+        } else {
+            ++stats.failed;
+        }
+    }
+
+    if (verbose) {
+        std::cout << "[INFO] Temp cleanup dir=" << dir.string()
+                  << " scanned=" << stats.scanned
+                  << " candidates=" << stats.candidates
+                  << " deleted=" << stats.deleted
+                  << " freedBytes=" << stats.freedBytes
+                  << " failed=" << stats.failed
+                  << (dryRun ? " (dry-run)" : "")
+                  << std::endl;
+    }
+
+    return stats;
+}
+
+struct TempSpaceCheck {
+    uintmax_t availableBytes = 0;
+    uintmax_t requiredBytes = 0;
+    uintmax_t minFreeBytes = 0;
+};
+
+TempSpaceCheck preflightTempSpaceForPam(const fs::path& tempDir,
+                                        int width,
+                                        int height,
+                                        double safetyMultiplier,
+                                        uintmax_t minFreeBytes,
+                                        bool verbose) {
+    std::error_code ec;
+    const auto si = fs::space(tempDir, ec);
+    if (ec) {
+        throw RasterizationException("Failed to query temp free space for " + tempDir.string() + ": " + ec.message());
+    }
+
+    const uintmax_t payloadBytes = static_cast<uintmax_t>(width) * static_cast<uintmax_t>(height) * 4ull;
+    const uintmax_t withSafety = static_cast<uintmax_t>(static_cast<long double>(payloadBytes) * std::max(1.0, safetyMultiplier));
+    const uintmax_t required = withSafety + minFreeBytes;
+
+    if (verbose) {
+        std::cout << "[INFO] Temp preflight dir=" << tempDir.string()
+                  << " width=" << width
+                  << " height=" << height
+                  << " rawPamBytes=" << payloadBytes
+                  << " safetyMultiplier=" << safetyMultiplier
+                  << " minFreeBytes=" << minFreeBytes
+                  << " requiredBytes=" << required
+                  << " freeBytes=" << si.available
+                  << std::endl;
+    }
+
+    if (si.available < required) {
+        std::ostringstream oss;
+        oss << "Insufficient temp space for CMYK raster output. "
+            << "requiredBytes=" << required
+            << " (rawPamBytes=" << payloadBytes
+            << ", safetyMultiplier=" << safetyMultiplier
+            << ", minFreeBytes=" << minFreeBytes
+            << "), freeBytes=" << si.available
+            << ", tempPath=" << tempDir.string();
+        throw RasterizationException(oss.str());
+    }
+
+    TempSpaceCheck out;
+    out.availableBytes = si.available;
+    out.requiredBytes = required;
+    out.minFreeBytes = minFreeBytes;
+    return out;
+}
+
+} // namespace
 
 PDFRasterizer::PDFRasterizer() : initialized_(false) {}
 
@@ -236,11 +417,12 @@ RasterFileInfo PDFRasterizer::rasterizeToFile(const std::string& pdfPath,
     auto now = std::chrono::steady_clock::now();
     auto us = std::chrono::duration_cast<std::chrono::microseconds>(
         now.time_since_epoch()).count();
+    const std::string tempDir = getTempDirPath();
     std::ostringstream tmpPath;
 #ifdef _WIN32
-    tmpPath << "C:/Windows/Temp/rip_" << _getpid() << "_" << us << ".pgm";
+    tmpPath << tempDir << "/rip_" << _getpid() << "_" << us << ".pgm";
 #else
-    tmpPath << "/tmp/rip_" << getpid() << "_" << us << ".pgm";
+    tmpPath << tempDir << "/rip_" << getpid() << "_" << us << ".pgm";
 #endif
     std::string tempPgm = tmpPath.str();
 
@@ -327,11 +509,14 @@ CmykRasterData PDFRasterizer::rasterizeToCmykPlanes(const std::string& pdfPath,
     auto now = std::chrono::steady_clock::now();
     auto us = std::chrono::duration_cast<std::chrono::microseconds>(
         now.time_since_epoch()).count();
+    const std::string tempDir = getTempDirPath();
+    const fs::path tempDirPath(tempDir);
+
     std::ostringstream tmpPath;
 #ifdef _WIN32
-    tmpPath << "C:/Windows/Temp/rip_" << _getpid() << "_" << us << ".pam";
+    tmpPath << tempDir << "/rip_" << _getpid() << "_" << us << ".pam";
 #else
-    tmpPath << "/tmp/rip_" << getpid() << "_" << us << ".pam";
+    tmpPath << tempDir << "/rip_" << getpid() << "_" << us << ".pam";
 #endif
     std::string tempPam = tmpPath.str();
     std::string tempCmykPdf = tempPam + ".cmyk.pdf";
@@ -438,8 +623,64 @@ CmykRasterData PDFRasterizer::rasterizeToCmykPlanes(const std::string& pdfPath,
         }
     }
 
+    // Temp storage guardrails (cleanup + free-space preflight) before PAM generation.
+    const bool tempVerbose = envBool("RIP_TEMP_VERBOSE", true);
+    if (envBool("RIP_TEMP_CLEANUP_ENABLE", true)) {
+        const int maxAgeHours = static_cast<int>(envLongLong("RIP_TEMP_CLEANUP_MAX_AGE_HOURS", 24));
+        const int keepLatest = static_cast<int>(envLongLong("RIP_TEMP_CLEANUP_KEEP_LATEST", 20));
+        const bool cleanupDryRun = envBool("RIP_TEMP_CLEANUP_DRY_RUN", false);
+        cleanupRipTempArtifacts(tempDirPath, maxAgeHours, keepLatest, cleanupDryRun, tempVerbose);
+    }
+
     int xDpi = params.dpi;
     int yDpi = (params.yDpi > 0) ? params.yDpi : params.dpi;
+
+    // Estimate raster dimensions with Ghostscript bbox so we can preflight temp free space.
+    int estWidth = 0;
+    int estHeight = 0;
+    {
+        std::string bboxErr = tempPam + ".bbox.stderr";
+        std::ostringstream bboxCmd;
+        bboxCmd << "gswin64c -q -dNOPAUSE -dBATCH -sDEVICE=bbox ";
+        if (params.pageNumber > 0) {
+            bboxCmd << "-dFirstPage=" << params.pageNumber << " -dLastPage=" << params.pageNumber << " ";
+        }
+        bboxCmd << "-f \"" << rasterSourcePdf << "\"";
+#ifdef _WIN32
+        bboxCmd << " 2>\"" << bboxErr << "\"";
+#else
+        bboxCmd << " 2>" << bboxErr;
+#endif
+        (void)system(bboxCmd.str().c_str()); // best effort estimation
+
+        std::ifstream bboxFile(bboxErr);
+        if (bboxFile) {
+            std::string line;
+            while (std::getline(bboxFile, line)) {
+                if (line.find("%%HiResBoundingBox:") != std::string::npos ||
+                    line.find("%%BoundingBox:") != std::string::npos) {
+                    std::istringstream iss(line.substr(line.find(":") + 1));
+                    double llx = 0.0, lly = 0.0, urx = 0.0, ury = 0.0;
+                    if (iss >> llx >> lly >> urx >> ury) {
+                        const double wPt = std::max(0.0, urx - llx);
+                        const double hPt = std::max(0.0, ury - lly);
+                        estWidth = std::max(estWidth, static_cast<int>(std::ceil(wPt * static_cast<double>(xDpi) / 72.0)));
+                        estHeight = std::max(estHeight, static_cast<int>(std::ceil(hPt * static_cast<double>(yDpi) / 72.0)));
+                    }
+                }
+            }
+        }
+        std::remove(bboxErr.c_str());
+    }
+
+    if (estWidth <= 0 || estHeight <= 0) {
+        throw RasterizationException("Unable to estimate CMYK raster dimensions for temp-space preflight");
+    }
+
+    const double safetyMultiplier = std::max(1.0, envDouble("RIP_TEMP_SAFETY_MULTIPLIER", 1.35));
+    const uintmax_t minFreeBytes = static_cast<uintmax_t>(std::max<long long>(0, envLongLong("RIP_TEMP_MIN_FREE_BYTES", 0)));
+    preflightTempSpaceForPam(tempDirPath, estWidth, estHeight, safetyMultiplier, minFreeBytes, tempVerbose);
+
     if (xDpi == yDpi) {
         cmd << "-r" << xDpi << " ";
     } else {
