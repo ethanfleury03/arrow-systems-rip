@@ -31,8 +31,21 @@ if not exist "%RIP_ROOT%\failed" mkdir "%RIP_ROOT%\failed"
 
 REM ===== Free-space check =====
 echo [INFO] Checking free space on %RIP_DRIVE%...
-powershell -NoProfile -Command ^
-"$drive='%RIP_DRIVE%'; $minGb=[double]'%RIP_MIN_FREE_GB%'; $required=[int64]($minGb*1GB); $disk=Get-CimInstance -ClassName Win32_LogicalDisk -Filter \"DeviceID='$drive'\"; if(-not $disk){Write-Host ('[ERROR] Drive not found: ' + $drive); exit 1}; $freeText=[string]$disk.FreeSpace; [int64]$free=0; if(-not [int64]::TryParse($freeText,[ref]$free)){Write-Host ('[ERROR] Invalid free space value for ' + $drive + ': ' + $freeText); exit 1}; $freeGb=[math]::Round($free/1GB,2); $requiredGb=[math]::Round($required/1GB,2); if($free -lt $required){Write-Host ('[ERROR] Low space on ' + $drive + ': ' + $freeGb + ' GB free (required >= ' + $requiredGb + ' GB)'); exit 1}else{Write-Host ('[OK] ' + $drive + ' free: ' + $freeGb + ' GB (required >= ' + $requiredGb + ' GB)'); exit 0}"
+set RIP_FREE_BYTES_RAW=
+for /f "tokens=2 delims=:" %%A in ('fsutil volume diskfree %RIP_DRIVE% ^| findstr /I /C:"Total free bytes"') do (
+  for /f "tokens=*" %%B in ("%%A") do set "RIP_FREE_BYTES_RAW=%%B"
+)
+set "RIP_FREE_BYTES=%RIP_FREE_BYTES_RAW:,=%"
+if not defined RIP_FREE_BYTES (
+  echo [ERROR] Could not determine free space on %RIP_DRIVE%.
+  exit /b 1
+)
+echo(%RIP_FREE_BYTES%| findstr /R "^[0-9][0-9]*$" >nul
+if errorlevel 1 (
+  echo [ERROR] Invalid free space value on %RIP_DRIVE%: %RIP_FREE_BYTES%
+  exit /b 1
+)
+powershell -NoProfile -Command "$free=[int64]%RIP_FREE_BYTES%; $required=[int64](%RIP_MIN_FREE_GB%*1GB); $freeGb=[math]::Round($free/1GB,2); $requiredGb=[math]::Round($required/1GB,2); if($free -lt $required){Write-Host ('[ERROR] Low space on %RIP_DRIVE%: ' + $freeGb + ' GB free (required >= ' + $requiredGb + ' GB)'); exit 1}else{Write-Host ('[OK] %RIP_DRIVE% free: ' + $freeGb + ' GB (required >= ' + $requiredGb + ' GB)'); exit 0}"
 if errorlevel 1 exit /b 1
 
 echo [INFO] RIP_TEMP_DIR=%RIP_TEMP_DIR%
