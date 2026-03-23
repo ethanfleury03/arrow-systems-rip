@@ -88,6 +88,21 @@ Expected behavior:
 - Default run logs `Render mode selected: CMYK_COLOR` and `Plane processing plan: 4 plane(s) [Magenta, Cyan, Black, Yellow]`.
 - Mono only happens when explicitly requested (`--gray/--mono` or `USE_FAST_MONO=1`).
 - RIP stays at 1600 DPI (no automatic fallback to lower DPI).
-- If Ghostscript exits non-zero OR stderr includes page draw failure signatures, RIP aborts immediately before bilevel conversion.
-- If PGM is truncated/partial, RIP reports exact `actualBytes` vs `expectedTotalBytes` and aborts.
-- One guarded retry may occur at the same 1600 DPI only when first-pass output validation fails (transient file race).
+- CMYK Ghostscript path is fail-fast: if GS exit is non-zero OR stderr includes draw-failure signatures (`Page drawing error occurred`, `Could not draw this page at all`, `page will be missing in the output`), RIP aborts before PAM parsing/plane split.
+- CMYK PAM output is validated before use: header + payload size check (`expectedTotalBytes` vs `actualBytes`, plus expected payload bytes).
+- One guarded retry at the same 1600 DPI is allowed only for post-GS CMYK PAM validation/read failures (fresh temp output path each attempt).
+
+## CMYK 1600 fail-fast regression command (Ethan)
+
+Run from `C:\Users\Arrow\Arrow-Rip` with Ethan's known repro PDF:
+
+```bat
+set USE_FAST_MONO=0
+set USE_TRUE_CMYK=1
+build\Release\memjet-rip.exe -i C:\print\ethan-problem.pdf --pes-ip 192.168.1.100 --dpi 1600 --cmyk -v
+```
+
+Expected CMYK 1600 diagnostics:
+- Logs include CMYK GS `attempt`, `exitCode`, stderr tail, output file size, and expected payload size.
+- On draw-failure signature, command aborts immediately with actionable GS error (no `Incomplete CMYK PAM payload`).
+- On truncated PAM race, one retry is attempted at same DPI with a fresh temp `.pam` path, then hard-fails with precise expected vs actual byte counts.

@@ -329,7 +329,38 @@ bool containsPageDrawFailure(const std::string& s) {
         return static_cast<char>(std::tolower(c));
     });
     return (lower.find("page drawing error occurred") != std::string::npos) ||
-           (lower.find("could not draw this page at all") != std::string::npos);
+           (lower.find("could not draw this page at all") != std::string::npos) ||
+           (lower.find("page will be missing in the output") != std::string::npos);
+}
+
+void validatePamPayload(const RasterFileInfo& info, const std::string& filePath, int expectedDepth) {
+    if (expectedDepth <= 0) {
+        throw RasterizationException("Invalid PAM expected depth");
+    }
+
+    struct stat st;
+    if (stat(filePath.c_str(), &st) != 0) {
+        throw RasterizationException("Failed to stat PAM file for payload validation: " + filePath);
+    }
+
+    const uint64_t actualBytes = static_cast<uint64_t>(st.st_size);
+    const uint64_t headerBytes = static_cast<uint64_t>(info.dataOffset);
+    const uint64_t expectedPayloadBytes = static_cast<uint64_t>(info.width) *
+                                          static_cast<uint64_t>(info.height) *
+                                          static_cast<uint64_t>(expectedDepth);
+    const uint64_t expectedTotalBytes = headerBytes + expectedPayloadBytes;
+
+    if (actualBytes < expectedTotalBytes) {
+        std::ostringstream oss;
+        oss << "Truncated CMYK PAM output: actualBytes=" << actualBytes
+            << ", expectedTotalBytes=" << expectedTotalBytes
+            << ", headerBytes=" << headerBytes
+            << ", expectedPayloadBytes=" << expectedPayloadBytes
+            << ", width=" << info.width
+            << ", height=" << info.height
+            << ", depth=" << expectedDepth;
+        throw RasterizationException(oss.str());
+    }
 }
 
 } // namespace
@@ -737,11 +768,6 @@ CmykRasterData PDFRasterizer::rasterizeToCmykPlanes(const std::string& pdfPath,
 #endif
     };
 
-    std::ostringstream cmd;
-    cmd << "gswin64c ";
-    cmd << "-q -dNOPAUSE -dBATCH ";
-    cmd << "-sDEVICE=pamcmyk32 ";
-
     // Force stable CMYK conversion profile for normal PDFs (RGB/ICC/spot mixed sources)
     const char* envCmykProfile = std::getenv("GS_CMYK_PROFILE");
     std::string cmykProfile = (envCmykProfile && envCmykProfile[0] != '\0')
@@ -824,6 +850,51 @@ CmykRasterData PDFRasterizer::rasterizeToCmykPlanes(const std::string& pdfPath,
     int xDpi = params.dpi;
     int yDpi = (params.yDpi > 0) ? params.yDpi : params.dpi;
 
+    auto makeTempPamPath = [&](int attempt) {
+        std::ostringstream p;
+#ifdef _WIN32
+        p << tempDir << "/rip_" << _getpid() << "_" << us << "_a" << attempt << ".pam";
+#else
+        p << tempDir << "/rip_" << getpid() << "_" << us << "_a" << attempt << ".pam";
+#endif
+        return p.str();
+    };
+
+    auto buildCmykRasterCommand = [&](const std::string& outputPam, const std::string& errPath) {
+        std::ostringstream cmd;
+        cmd << "gswin64c ";
+        cmd << "-q -dNOPAUSE -dBATCH -dSAFER ";
+        cmd << "-dPDFSTOPONERROR ";
+        cmd << "-dAutoRotatePages=/None ";
+        cmd << "-dBandBufferSpace=200000000 -dBufferSpace=200000000 ";
+        cmd << "-sDEVICE=pamcmyk32 ";
+
+        if (xDpi == yDpi) {
+            cmd << "-r" << xDpi << " ";
+        } else {
+            cmd << "-r" << xDpi << "x" << yDpi << " ";
+        }
+
+        cmd << "-sOutputFile=\"" << outputPam << "\" ";
+
+        if (!params.paperSize.empty()) {
+            cmd << "-sPAPERSIZE=" << params.paperSize << " ";
+        }
+
+        if (params.pageNumber > 0) {
+            cmd << "-dFirstPage=" << params.pageNumber << " ";
+            cmd << "-dLastPage=" << params.pageNumber << " ";
+        }
+
+        cmd << "-f \"" << rasterSourcePdf << "\"";
+#ifdef _WIN32
+        cmd << " 2>\"" << errPath << "\"";
+#else
+        cmd << " 2>" << errPath;
+#endif
+        return cmd.str();
+    };
+
     // Estimate raster dimensions with Ghostscript bbox so we can preflight temp free space.
     int estWidth = 0;
     int estHeight = 0;
@@ -870,69 +941,133 @@ CmykRasterData PDFRasterizer::rasterizeToCmykPlanes(const std::string& pdfPath,
     const uintmax_t minFreeBytes = static_cast<uintmax_t>(std::max<long long>(0, envLongLong("RIP_TEMP_MIN_FREE_BYTES", 0)));
     preflightTempSpaceForPam(tempDir, estWidth, estHeight, safetyMultiplier, minFreeBytes, tempVerbose);
 
-    if (xDpi == yDpi) {
-        cmd << "-r" << xDpi << " ";
-    } else {
-        cmd << "-r" << xDpi << "x" << yDpi << " ";
-    }
+    std::string failureReason;
+    RasterFileInfo info{};
+    info.width = 0;
+    info.height = 0;
+    info.dataOffset = 0;
+    std::vector<uint8_t> interleaved;
 
-    cmd << "-sOutputFile=" << tempPam << " ";
+    for (int attempt = 1; attempt <= 2; ++attempt) {
+        const std::string attemptPam = makeTempPamPath(attempt);
+        const std::string attemptErr = attemptPam + ".stderr";
 
-    if (!params.paperSize.empty()) {
-        cmd << "-sPAPERSIZE=" << params.paperSize << " ";
-    }
+        std::remove(attemptPam.c_str());
+        std::remove(attemptErr.c_str());
 
-    if (params.pageNumber > 0) {
-        cmd << "-dFirstPage=" << params.pageNumber << " ";
-        cmd << "-dLastPage=" << params.pageNumber << " ";
-    }
+        const std::string cmd = buildCmykRasterCommand(attemptPam, attemptErr);
+        std::cout << "[INFO] Executing CMYK raster (attempt " << attempt << "/2): " << cmd << std::endl;
+        int status = system(cmd.c_str());
 
-    cmd << "-f \"" << rasterSourcePdf << "\"";
-#ifdef _WIN32
-    cmd << " 2>\"" << stderrFile << "\"";
-#else
-    cmd << " 2>" << stderrFile;
-#endif
+        const std::string errMsg = readTextFile(attemptErr);
+        const std::string errTail = tailText(errMsg, 1200);
+        const uintmax_t outputSize = safeFileSize(attemptPam);
+        const bool drawFailure = containsPageDrawFailure(errMsg);
 
-    std::cout << "[INFO] Executing CMYK raster: " << cmd.str() << std::endl;
-    int status = system(cmd.str().c_str());
-    if (status != 0) {
-        std::ifstream errFile(stderrFile);
-        std::string errMsg;
-        if (errFile) {
-            std::ostringstream ess;
-            ess << errFile.rdbuf();
-            errMsg = ess.str();
+        std::cout << "[INFO] CMYK GS attempt=" << attempt
+                  << " exitCode=" << status
+                  << " outputBytes=" << outputSize
+                  << " stderrTail=" << (errTail.empty() ? "<empty>" : errTail)
+                  << std::endl;
+
+        if (status != 0 || drawFailure) {
+            std::ostringstream reason;
+            reason << "Ghostscript CMYK raster failed at " << xDpi << "x" << yDpi << " DPI"
+                   << " (attempt " << attempt << ")"
+                   << ", exitCode=" << status;
+            if (drawFailure) {
+                reason << ", detected page draw failure signature in stderr"
+                       << " (e.g. 'Page drawing error occurred / Could not draw this page at all').";
+            }
+            if (!errTail.empty()) {
+                reason << " stderrTail=" << errTail;
+            }
+            failureReason = reason.str();
+
+            std::remove(attemptErr.c_str());
+            std::remove(attemptPam.c_str());
+
+            // Fail-fast on GS execution/render errors; no payload parse/split on broken output.
+            break;
         }
-        std::remove(stderrFile.c_str());
-        std::remove(tempPam.c_str());
-        if (profileApplied) std::remove(tempCmykPdf.c_str());
-        throw RasterizationException("Ghostscript CMYK failed (exit " +
-            std::to_string(status) + "): " + errMsg);
+
+        try {
+            info = parsePAMHeader(attemptPam);
+            info.pageNumber = params.pageNumber > 0 ? params.pageNumber : 1;
+            validatePamPayload(info, attemptPam, 4);
+
+            const size_t pixelCount = static_cast<size_t>(info.width) * static_cast<size_t>(info.height);
+            const size_t expectedBytes = pixelCount * 4;
+            std::cout << "[INFO] CMYK payload check attempt=" << attempt
+                      << " expectedPayloadBytes=" << expectedBytes
+                      << " outputBytes=" << outputSize
+                      << std::endl;
+
+            std::ifstream file(attemptPam, std::ios::binary);
+            if (!file) {
+                throw RasterizationException("Failed to open CMYK PAM file: " + attemptPam);
+            }
+
+            file.seekg(static_cast<std::streamoff>(info.dataOffset), std::ios::beg);
+            interleaved.resize(expectedBytes);
+            file.read(reinterpret_cast<char*>(interleaved.data()), static_cast<std::streamsize>(expectedBytes));
+            if (!file) {
+                struct stat st;
+                const uint64_t actualBytes = (stat(attemptPam.c_str(), &st) == 0)
+                    ? static_cast<uint64_t>(st.st_size)
+                    : 0ull;
+                const uint64_t expectedTotalBytes = static_cast<uint64_t>(info.dataOffset) +
+                                                    static_cast<uint64_t>(expectedBytes);
+                std::ostringstream oss;
+                oss << "Incomplete CMYK PAM payload after header validation"
+                    << ": expectedPayloadBytes=" << expectedBytes
+                    << ", expectedTotalBytes=" << expectedTotalBytes
+                    << ", actualBytes=" << actualBytes;
+                throw RasterizationException(oss.str());
+            }
+
+            std::remove(attemptErr.c_str());
+            std::remove(tempPam.c_str());
+            tempPam = attemptPam;
+            break;
+        } catch (const std::exception& e) {
+            const uintmax_t recheckSize = safeFileSize(attemptPam);
+            const uint64_t expectedPayloadBytes = static_cast<uint64_t>(std::max(0, info.width)) *
+                                                  static_cast<uint64_t>(std::max(0, info.height)) * 4ull;
+            const uint64_t expectedTotalBytes = static_cast<uint64_t>(info.dataOffset) + expectedPayloadBytes;
+
+            std::ostringstream reason;
+            reason << "CMYK PAM validation failed after successful Ghostscript run"
+                   << " (attempt " << attempt << ")"
+                   << ", outputBytes=" << recheckSize
+                   << ", expectedPayloadBytes=" << expectedPayloadBytes
+                   << ", expectedTotalBytes=" << expectedTotalBytes
+                   << ", reason=" << e.what();
+            failureReason = reason.str();
+
+            std::cout << "[ERROR] " << failureReason << std::endl;
+
+            std::remove(attemptErr.c_str());
+            std::remove(attemptPam.c_str());
+
+            if (attempt == 1) {
+                std::cout << "[WARN] Retrying CMYK Ghostscript once at same DPI due to validation failure" << std::endl;
+                continue;
+            }
+            break;
+        }
     }
-    std::remove(stderrFile.c_str());
 
-    RasterFileInfo info = parsePAMHeader(tempPam);
-    info.pageNumber = params.pageNumber > 0 ? params.pageNumber : 1;
-
-    std::ifstream file(tempPam, std::ios::binary);
-    if (!file) {
-        std::remove(tempPam.c_str());
+    if (interleaved.empty()) {
         if (profileApplied) std::remove(tempCmykPdf.c_str());
-        throw RasterizationException("Failed to open CMYK PAM file: " + tempPam);
+        if (failureReason.empty()) {
+            failureReason = "Ghostscript CMYK rasterization failed for unknown reason";
+        }
+        throw RasterizationException(failureReason + ". Aborting before CMYK plane split.");
     }
 
-    file.seekg(static_cast<std::streamoff>(info.dataOffset), std::ios::beg);
     const size_t pixelCount = static_cast<size_t>(info.width) * static_cast<size_t>(info.height);
     const size_t expectedBytes = pixelCount * 4;
-
-    std::vector<uint8_t> interleaved(expectedBytes);
-    file.read(reinterpret_cast<char*>(interleaved.data()), static_cast<std::streamsize>(expectedBytes));
-    if (!file) {
-        std::remove(tempPam.c_str());
-        if (profileApplied) std::remove(tempCmykPdf.c_str());
-        throw RasterizationException("Incomplete CMYK PAM payload");
-    }
 
     CmykRasterData out;
     out.width = info.width;
@@ -1005,6 +1140,30 @@ RasterFileInfo PDFRasterizer::parsePAMHeader(const std::string& filePath) {
     if (info.dataOffset == static_cast<size_t>(-1)) {
         throw RasterizationException("Failed to read PAM data offset");
     }
+
+    struct stat st;
+    if (stat(filePath.c_str(), &st) != 0) {
+        throw RasterizationException("Failed to stat PAM file for size validation: " + filePath);
+    }
+    info.fileSizeBytes = static_cast<size_t>(st.st_size);
+
+    const uint64_t expectedPayloadBytes = static_cast<uint64_t>(info.width) *
+                                          static_cast<uint64_t>(info.height) *
+                                          static_cast<uint64_t>(depth);
+    const uint64_t expectedTotalBytes = static_cast<uint64_t>(info.dataOffset) + expectedPayloadBytes;
+    const uint64_t actualBytes = static_cast<uint64_t>(info.fileSizeBytes);
+    if (actualBytes < expectedTotalBytes) {
+        std::ostringstream oss;
+        oss << "Truncated PAM raster output: actualBytes=" << actualBytes
+            << ", expectedTotalBytes=" << expectedTotalBytes
+            << ", headerBytes=" << info.dataOffset
+            << ", expectedPayloadBytes=" << expectedPayloadBytes
+            << ", width=" << info.width
+            << ", height=" << info.height
+            << ", depth=" << depth;
+        throw RasterizationException(oss.str());
+    }
+
     return info;
 }
 
