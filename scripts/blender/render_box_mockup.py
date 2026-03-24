@@ -146,6 +146,23 @@ def build_cardboard_material(bpy, job: dict):
     return material
 
 
+def set_enum_if_supported(target, attr: str, value: str) -> None:
+    if not hasattr(target, attr):
+        return
+
+    try:
+        bl_rna = getattr(target, "bl_rna", None)
+        prop = bl_rna.properties.get(attr) if bl_rna else None
+        if prop and hasattr(prop, "enum_items"):
+            valid_values = {item.identifier for item in prop.enum_items}
+            if value not in valid_values:
+                return
+        setattr(target, attr, value)
+    except Exception:
+        # Ignore Blender version/API differences and keep rendering.
+        pass
+
+
 def build_label_material(bpy, label_path: Path):
     material = bpy.data.materials.new(name="LabelMaterial")
     material.use_nodes = True
@@ -167,8 +184,10 @@ def build_label_material(bpy, label_path: Path):
     links.new(texture.outputs["Color"], bsdf.inputs["Base Color"])
     if "Alpha" in texture.outputs and "Alpha" in bsdf.inputs:
         links.new(texture.outputs["Alpha"], bsdf.inputs["Alpha"])
-        material.blend_method = "BLEND"
-        material.shadow_method = "CLIP"
+        # Blender material transparency/shadow options have changed across versions.
+        set_enum_if_supported(material, "blend_method", "BLEND")
+        set_enum_if_supported(material, "surface_render_method", "BLENDED")
+        set_enum_if_supported(material, "shadow_method", "CLIP")
 
     links.new(bsdf.outputs["BSDF"], output_node.inputs["Surface"])
     return material
