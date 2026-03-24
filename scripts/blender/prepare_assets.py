@@ -12,6 +12,10 @@ import json
 from pathlib import Path
 
 
+SCRIPT_PATH = Path(__file__).resolve()
+DEFAULT_REPO_ROOT = SCRIPT_PATH.parents[2]
+
+
 REQUIRED_TOP_KEYS = ["job_id", "scene", "box", "label", "output"]
 REQUIRED_VIEW_KEYS = ["front", "angle", "closeup"]
 
@@ -25,6 +29,26 @@ def parse_args() -> argparse.Namespace:
 
 def _is_number(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def find_repo_root(start: Path) -> Path:
+    for parent in [start, *start.parents]:
+        if (parent / ".git").exists():
+            return parent
+    return DEFAULT_REPO_ROOT
+
+
+def candidate_bases(job_path: Path) -> list[Path]:
+    bases = [job_path.parent, find_repo_root(job_path), DEFAULT_REPO_ROOT, Path.cwd()]
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for b in bases:
+        ab = b.absolute()
+        key = str(ab)
+        if key not in seen:
+            seen.add(key)
+            unique.append(ab)
+    return unique
 
 
 def validate_job(job: dict) -> list[str]:
@@ -69,13 +93,32 @@ def validate_job(job: dict) -> list[str]:
     return errors
 
 
-def resolve_output_paths(job: dict) -> dict[str, Path]:
+def resolve_input_path(raw_path: str, job_path: Path) -> Path:
+    candidate = Path(raw_path).expanduser()
+    if candidate.is_absolute():
+        return candidate
+
+    for base in candidate_bases(job_path):
+        resolved = (base / candidate).resolve()
+        if resolved.exists():
+            return resolved
+
+    return (job_path.parent / candidate).resolve()
+
+
+def absolutize_output_path(path: Path, job_path: Path) -> Path:
+    if path.is_absolute():
+        return path
+    return (job_path.parent / path).absolute()
+
+
+def resolve_output_paths(job: dict, job_path: Path) -> dict[str, Path]:
     output = job.get("output", {})
     views = output.get("views")
     if isinstance(views, dict) and views:
-        return {k: Path(v) for k, v in views.items() if k in REQUIRED_VIEW_KEYS}
+        return {k: absolutize_output_path(Path(v), job_path) for k, v in views.items() if k in REQUIRED_VIEW_KEYS}
 
-    base = Path(output.get("image_path", "renders/box-mockup-mvp-001.png"))
+    base = absolutize_output_path(Path(output.get("image_path", "renders/box-mockup-mvp-001.png")), job_path)
     stem = base.stem
     suffix = base.suffix or ".png"
     return {
@@ -87,7 +130,9 @@ def resolve_output_paths(job: dict) -> dict[str, Path]:
 
 def main() -> int:
     args = parse_args()
-    job_path = Path(args.job)
+    job_path = Path(args.job).expanduser()
+    if not job_path.is_absolute():
+        job_path = (Path.cwd() / job_path).absolute()
 
     if not job_path.exists():
         print(f"[error] Job file does not exist: {job_path}")
@@ -102,13 +147,13 @@ def main() -> int:
             print(f"[error] {e}")
         return 1
 
-    label_path = Path(job.get("label", {}).get("image_path", "")).expanduser()
+    label_path = resolve_input_path(str(job.get("label", {}).get("image_path", "")), job_path)
     if not label_path.exists():
         print(f"[warn] Label image missing: {label_path}")
     else:
         print(f"[ok] Label image found: {label_path}")
 
-    output_paths = resolve_output_paths(job)
+    output_paths = resolve_output_paths(job, job_path)
     if args.create_dirs:
         created = set()
         for out in output_paths.values():

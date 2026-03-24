@@ -14,6 +14,10 @@ import sys
 from pathlib import Path
 
 
+SCRIPT_PATH = Path(__file__).resolve()
+DEFAULT_REPO_ROOT = SCRIPT_PATH.parents[2]
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render a box label mockup in Blender")
     parser.add_argument("--job", required=True, help="Path to job JSON")
@@ -33,6 +37,26 @@ def load_job(job_path: Path) -> dict:
         raise ValueError(f"Job file missing required keys: {', '.join(missing)}")
 
     return data
+
+
+def find_repo_root(start: Path) -> Path:
+    for parent in [start, *start.parents]:
+        if (parent / ".git").exists():
+            return parent
+    return DEFAULT_REPO_ROOT
+
+
+def candidate_bases(job_path: Path) -> list[Path]:
+    bases = [job_path.parent, find_repo_root(job_path), DEFAULT_REPO_ROOT, Path.cwd()]
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for b in bases:
+        ab = b.absolute()
+        key = str(ab)
+        if key not in seen:
+            seen.add(key)
+            unique.append(ab)
+    return unique
 
 
 def hex_to_rgba(color: str, alpha: float = 1.0) -> tuple[float, float, float, float]:
@@ -59,11 +83,31 @@ def get_dimensions_m(job: dict) -> tuple[float, float, float]:
     return width, height, depth
 
 
-def resolve_render_paths(job: dict) -> dict[str, Path]:
+def resolve_input_path(raw_path: str, job_path: Path) -> Path:
+    candidate = Path(raw_path).expanduser()
+    if candidate.is_absolute():
+        return candidate
+
+    # Prefer paths relative to the job file, then discovered repo root, then cwd (legacy).
+    for base in candidate_bases(job_path):
+        resolved = (base / candidate).resolve()
+        if resolved.exists():
+            return resolved
+
+    return (job_path.parent / candidate).resolve()
+
+
+def absolutize_output_path(path: Path, job_path: Path) -> Path:
+    if path.is_absolute():
+        return path
+    return (job_path.parent / path).absolute()
+
+
+def resolve_render_paths(job: dict, job_path: Path) -> dict[str, Path]:
     output = job.get("output", {})
     views = output.get("views")
     if isinstance(views, dict) and views:
-        paths = {name: Path(path) for name, path in views.items()}
+        paths = {name: absolutize_output_path(Path(path), job_path) for name, path in views.items()}
         required = {"front", "angle", "closeup"}
         missing = required - set(paths.keys())
         if missing:
@@ -71,7 +115,7 @@ def resolve_render_paths(job: dict) -> dict[str, Path]:
         return {k: paths[k] for k in ["front", "angle", "closeup"]}
 
     # Backward compatible path expansion from legacy single image_path
-    base = Path(output.get("image_path", "renders/box-mockup-mvp-001.png"))
+    base = absolutize_output_path(Path(output.get("image_path", "renders/box-mockup-mvp-001.png")), job_path)
     stem = base.stem
     suffix = base.suffix or ".png"
     parent = base.parent
@@ -82,8 +126,8 @@ def resolve_render_paths(job: dict) -> dict[str, Path]:
     }
 
 
-def ensure_output_dirs(job: dict) -> dict[str, Path]:
-    paths = resolve_render_paths(job)
+def ensure_output_dirs(job: dict, job_path: Path) -> dict[str, Path]:
+    paths = resolve_render_paths(job, job_path)
     for p in paths.values():
         p.parent.mkdir(parents=True, exist_ok=True)
     return paths
@@ -241,7 +285,7 @@ def configure_render_settings(bpy, job: dict):
     scene.render.resolution_y = int(res.get("height", 720))
 
 
-def render_with_blender(job: dict) -> dict[str, Path]:
+def render_with_blender(job: dict, job_path: Path) -> dict[str, Path]:
     try:
         import bpy  # type: ignore
     except ImportError as e:
@@ -250,11 +294,11 @@ def render_with_blender(job: dict) -> dict[str, Path]:
             "Use: ./scripts/blender/run_blender_headless.sh <job-file.json>"
         ) from e
 
-    label_path = Path(job.get("label", {}).get("image_path", "")).expanduser()
+    label_path = resolve_input_path(str(job.get("label", {}).get("image_path", "")), job_path)
     if not label_path.exists():
         raise FileNotFoundError(f"Label image not found: {label_path}")
 
-    render_paths = ensure_output_dirs(job)
+    render_paths = ensure_output_dirs(job, job_path)
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
     _, _, dims = create_box_and_label(bpy, job, label_path)
@@ -280,8 +324,11 @@ def main() -> int:
 
     try:
         args = parse_args(argv)
-        job = load_job(Path(args.job))
-        outputs = render_with_blender(job)
+        job_path = Path(args.job).expanduser()
+        if not job_path.is_absolute():
+            job_path = (Path.cwd() / job_path).absolute()
+        job = load_job(job_path)
+        outputs = render_with_blender(job, job_path)
         print("[ok] Render complete:")
         for key, path in outputs.items():
             print(f"  - {key}: {path}")
