@@ -1,0 +1,43 @@
+{
+  "job_id": "box-mockup-phase2-001",
+  "scene": {
+    "background": "studio_gray",
+    "camera_preset": "phase2_three_view"
+  },
+  "box": {
+    "dimensions_mm": {
+      "width": 140,
+      "height": 210,
+      "depth": 70
+    },
+    "material": {
+      "base_color": "#d4c19d",
+      "roughness": 0.65
+    }
+  },
+  "label": {
+    "image_path": "assets/labels/example-label.png",
+    "target_face": "front",
+    "fit_mode": "contain",
+    "padding_mm": 4,
+    "placement": {
+      "center_x": 0.5,
+      "center_y": 0.56
+    },
+    "scale": {
+      "width": 0.78,
+      "height": 0.74
+    }
+  },
+  "output": {
+    "resolution": {
+      "width": 1280,
+      "height": 720
+    },
+    "views": {
+      "front": "renders/box-mockup-phase2-001-front.png",
+      "angle": "renders/box-mockup-phase2-001-angle.png",
+      "closeup": "renders/box-mockup-phase2-001-closeup.png"
+    }
+  }
+}
