@@ -168,6 +168,18 @@ def set_enum_if_supported(target, attr: str, value: str) -> None:
         pass
 
 
+def get_float(job: dict, path: list[str], default: float) -> float:
+    cur = job
+    for key in path:
+        if not isinstance(cur, dict) or key not in cur:
+            return default
+        cur = cur[key]
+    try:
+        return float(cur)
+    except Exception:
+        return default
+
+
 def compute_print_area_params(label_cfg: dict, image_aspect: float) -> dict:
     """Resolve Phase 3 print area with backwards compatibility for old placement/scale fields."""
     panel = str(label_cfg.get("target_face", "front")).lower()
@@ -325,6 +337,48 @@ def parse_presets(job: dict) -> dict:
         lighting_preset = "premium_softbox"
 
     return {"camera_preset": camera_preset, "lighting_preset": lighting_preset}
+
+
+def parse_color_management(job: dict) -> dict:
+    scene_cfg = job.get("scene", {}) if isinstance(job.get("scene"), dict) else {}
+    cm = scene_cfg.get("color_management") if isinstance(scene_cfg.get("color_management"), dict) else {}
+
+    view_transform = str(cm.get("view_transform", "AgX")).strip()
+    look = str(cm.get("look", "Medium High Contrast")).strip()
+    exposure = clamp(float(cm.get("exposure", 0.0)), -1.0, 1.0)
+    gamma = clamp(float(cm.get("gamma", 1.0)), 0.8, 1.2)
+
+    return {
+        "view_transform": view_transform,
+        "look": look,
+        "exposure": exposure,
+        "gamma": gamma,
+    }
+
+
+def set_color_management(scene, cm_cfg: dict) -> None:
+    view_settings = scene.view_settings
+    display_settings = scene.display_settings
+
+    set_enum_if_supported(view_settings, "view_transform", cm_cfg["view_transform"])
+    if getattr(view_settings, "view_transform", "") in {"", "Raw"}:
+        for fallback in ("AgX", "Filmic", "Standard"):
+            set_enum_if_supported(view_settings, "view_transform", fallback)
+            if getattr(view_settings, "view_transform", "") == fallback:
+                break
+
+    set_enum_if_supported(view_settings, "look", cm_cfg["look"])
+    if getattr(view_settings, "look", "") in {"", "None"}:
+        for fallback_look in ("Medium High Contrast", "High Contrast", "Medium Contrast"):
+            set_enum_if_supported(view_settings, "look", fallback_look)
+            if getattr(view_settings, "look", "") == fallback_look:
+                break
+
+    view_settings.exposure = cm_cfg["exposure"]
+    view_settings.gamma = cm_cfg["gamma"]
+
+    if hasattr(display_settings, "display_device"):
+        set_enum_if_supported(display_settings, "display_device", "sRGB")
 
 
 def build_box_material_with_decal(bpy, job: dict, label_path: Path, box_obj):
@@ -729,6 +783,16 @@ def setup_lighting_and_world(bpy, dims: tuple[float, float, float], job: dict) -
         rim_energy = 500
         top_energy = 220
 
+    ref_diag = math.sqrt((0.12**2) + (0.18**2) + (0.06**2))
+    obj_diag = max(math.sqrt(width * width + height * height + depth * depth), 0.01)
+    size_scale = clamp(ref_diag / obj_diag, 0.55, 1.5)
+    light_scale = clamp(get_float(job, ["scene", "lighting", "intensity_scale"], 1.0), 0.5, 1.35)
+
+    key_energy = clamp(key_energy * size_scale * light_scale, 280.0, 1450.0)
+    fill_energy = clamp(fill_energy * size_scale * light_scale, 120.0, 760.0)
+    rim_energy = clamp(rim_energy * size_scale * light_scale, 120.0, 820.0)
+    top_energy = clamp(top_energy * size_scale * light_scale, 60.0, 320.0)
+
     # Key light
     bpy.ops.object.light_add(type="AREA", location=(width * 2.45, -(depth * 2.75), height * 2.2))
     key = bpy.context.object
@@ -846,6 +910,59 @@ def setup_cameras(bpy, dims: tuple[float, float, float], job: dict):
     }
 
 
+def _camera_visible_bbox_points(scene, cam, obj) -> int:
+    try:
+        from bpy_extras.object_utils import world_to_camera_view  # type: ignore
+        from mathutils import Vector  # type: ignore
+    except Exception:
+        return 8
+
+    visible = 0
+    for corner in obj.bound_box:
+        world_co = obj.matrix_world @ Vector(corner)
+        co_ndc = world_to_camera_view(scene, cam, world_co)
+        if co_ndc.z > 0.0 and -0.1 <= co_ndc.x <= 1.1 and -0.1 <= co_ndc.y <= 1.1:
+            visible += 1
+    return visible
+
+
+def apply_camera_fallback(scene, cam, obj, dims: tuple[float, float, float], shot_name: str) -> None:
+    try:
+        from mathutils import Vector  # type: ignore
+    except Exception:
+        return
+
+    cam.data.clip_start = 0.01
+    cam.data.clip_end = 100.0
+
+    visible = _camera_visible_bbox_points(scene, cam, obj)
+    if visible >= 4:
+        return
+
+    width, height, depth = dims
+    center = obj.matrix_world.translation
+    radius = 0.5 * math.sqrt(width * width + height * height + depth * depth)
+
+    if shot_name == "angle":
+        direction = Vector((0.95, -1.0, 0.34)).normalized()
+        framing = 1.15
+    elif shot_name == "closeup":
+        direction = Vector((0.0, -1.0, 0.08)).normalized()
+        framing = 0.82
+    else:
+        direction = Vector((0.0, -1.0, 0.22)).normalized()
+        framing = 1.02
+
+    lens = max(float(cam.data.lens), 1.0)
+    sensor = max(float(getattr(cam.data, "sensor_width", 36.0)), 1.0)
+    fov = 2.0 * math.atan(sensor / (2.0 * lens))
+    dist = max((radius * framing) / max(math.tan(fov * 0.45), 0.08), radius * 1.6)
+
+    cam.location = center - (direction * dist)
+    look_quat = (center - cam.location).to_track_quat("-Z", "Y")
+    cam.rotation_euler = look_quat.to_euler()
+
+
 def configure_render_settings(bpy, job: dict):
     scene = bpy.context.scene
     output = job.get("output", {})
@@ -854,8 +971,13 @@ def configure_render_settings(bpy, job: dict):
     scene.render.engine = "BLENDER_EEVEE"
     scene.render.image_settings.file_format = "PNG"
     scene.render.film_transparent = False
+    scene.render.use_compositing = False
     scene.render.resolution_x = int(res.get("width", 1280))
     scene.render.resolution_y = int(res.get("height", 720))
+    scene.render.resolution_percentage = 100
+
+    cm_cfg = parse_color_management(job)
+    set_color_management(scene, cm_cfg)
 
     # Better defaults for realism
     eevee = scene.eevee
@@ -885,13 +1007,14 @@ def render_with_blender(job: dict, job_path: Path) -> dict[str, Path]:
     render_paths = ensure_output_dirs(job, job_path)
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    _, dims = create_box_with_label_decal(bpy, job, label_path)
+    box_obj, dims = create_box_with_label_decal(bpy, job, label_path)
     setup_lighting_and_world(bpy, dims, job)
     cams = setup_cameras(bpy, dims, job)
     configure_render_settings(bpy, job)
 
     scene = bpy.context.scene
     for view_name in ["front", "angle", "closeup"]:
+        apply_camera_fallback(scene, cams[view_name], box_obj, dims, view_name)
         scene.camera = cams[view_name]
         scene.render.filepath = str(render_paths[view_name].resolve())
         bpy.ops.render.render(write_still=True)

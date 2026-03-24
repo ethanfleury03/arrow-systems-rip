@@ -9,7 +9,16 @@
       "floor_tint_intensity": 0.42
     },
     "camera_preset": "phase3_three_view_realistic",
-    "lighting_preset": "premium_softbox"
+    "lighting_preset": "balanced_catalog",
+    "lighting": {
+      "intensity_scale": 0.95
+    },
+    "color_management": {
+      "view_transform": "AgX",
+      "look": "Medium High Contrast",
+      "exposure": 0.0,
+      "gamma": 1.0
+    }
   },
   "box": {
     "dimensions_mm": {
