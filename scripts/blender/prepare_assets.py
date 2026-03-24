@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Prepare/validate assets for the Blender box mockup MVP.
+Prepare/validate assets for the Blender box mockup pipeline.
 
 This script can run in normal Python (no Blender dependency).
 """
@@ -29,6 +29,10 @@ def parse_args() -> argparse.Namespace:
 
 def _is_number(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _in_range(v, lo: float, hi: float) -> bool:
+    return _is_number(v) and lo <= float(v) <= hi
 
 
 def find_repo_root(start: Path) -> Path:
@@ -65,20 +69,53 @@ def validate_job(job: dict) -> list[str]:
             errors.append(f"box.dimensions_mm.{k} must be a positive number")
 
     label = job.get("label", {})
-    placement = label.get("placement", {})
-    scale = label.get("scale", {})
+
+    # Phase 2 (legacy) fields remain supported.
+    placement = label.get("placement", {}) if isinstance(label.get("placement"), dict) else {}
+    scale = label.get("scale", {}) if isinstance(label.get("scale"), dict) else {}
 
     for k in ("center_x", "center_y"):
-        if k in placement:
-            v = placement[k]
-            if not _is_number(v) or not (0.0 <= float(v) <= 1.0):
-                errors.append(f"label.placement.{k} must be a number in [0, 1]")
+        if k in placement and not _in_range(placement[k], 0.0, 1.0):
+            errors.append(f"label.placement.{k} must be a number in [0, 1]")
 
     for k in ("width", "height"):
-        if k in scale:
-            v = scale[k]
-            if not _is_number(v) or not (0.05 <= float(v) <= 1.0):
-                errors.append(f"label.scale.{k} must be a number in [0.05, 1.0]")
+        if k in scale and not _in_range(scale[k], 0.05, 1.0):
+            errors.append(f"label.scale.{k} must be a number in [0.05, 1.0]")
+
+    # Phase 3 print area
+    print_area = label.get("print_area")
+    if print_area is not None:
+        if not isinstance(print_area, dict):
+            errors.append("label.print_area must be an object when provided")
+        else:
+            panel = print_area.get("panel", label.get("target_face", "front"))
+            if panel not in ("front", "side", "top"):
+                errors.append("label.print_area.panel must be one of: front|side|top")
+
+            if "rotation" in print_area and not _is_number(print_area.get("rotation")):
+                errors.append("label.print_area.rotation must be a number (degrees)")
+
+            if "scale_mode" in print_area and print_area.get("scale_mode") not in ("fit", "fill"):
+                errors.append("label.print_area.scale_mode must be one of: fit|fill")
+
+            if "bleed" in print_area and not _in_range(print_area.get("bleed"), 0.0, 0.49):
+                errors.append("label.print_area.bleed must be a number in [0.0, 0.49]")
+
+            bounds = print_area.get("bounds") if isinstance(print_area.get("bounds"), dict) else None
+            if bounds:
+                for k in ("x", "y", "width", "height"):
+                    if k not in bounds or not _in_range(bounds.get(k), 0.0, 1.0):
+                        errors.append(f"label.print_area.bounds.{k} must be a number in [0, 1]")
+                if _in_range(bounds.get("x", 0), 0.0, 1.0) and _in_range(bounds.get("width", 0), 0.0, 1.0):
+                    if float(bounds["x"]) + float(bounds["width"]) > 1.0:
+                        errors.append("label.print_area.bounds.x + width must be <= 1")
+                if _in_range(bounds.get("y", 0), 0.0, 1.0) and _in_range(bounds.get("height", 0), 0.0, 1.0):
+                    if float(bounds["y"]) + float(bounds["height"]) > 1.0:
+                        errors.append("label.print_area.bounds.y + height must be <= 1")
+            elif any(k in print_area for k in ("x", "y", "width", "height")):
+                for k in ("x", "y", "width", "height"):
+                    if k in print_area and not _in_range(print_area.get(k), 0.0, 1.0):
+                        errors.append(f"label.print_area.{k} must be a number in [0, 1]")
 
     output = job.get("output", {})
     views = output.get("views")

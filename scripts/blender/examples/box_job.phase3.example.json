@@ -1,0 +1,69 @@
+{
+  "job_id": "box-mockup-phase3-001",
+  "scene": {
+    "background": "studio_gray",
+    "camera_preset": "phase3_three_view_realistic"
+  },
+  "box": {
+    "dimensions_mm": {
+      "width": 140,
+      "height": 210,
+      "depth": 70
+    },
+    "material": {
+      "base_color": "#d4c19d",
+      "roughness": 0.66
+    }
+  },
+  "label": {
+    "image_path": "assets/labels/example-label.png",
+    "target_face": "front",
+    "print_area": {
+      "panel": "front",
+      "bounds": {
+        "x": 0.13,
+        "y": 0.12,
+        "width": 0.74,
+        "height": 0.76
+      },
+      "rotation": 0,
+      "scale_mode": "fit",
+      "bleed": 0.01
+    },
+    "optional_examples": {
+      "side_panel": {
+        "panel": "side",
+        "x": 0.15,
+        "y": 0.2,
+        "width": 0.7,
+        "height": 0.6,
+        "rotation": 0,
+        "scale_mode": "fill",
+        "bleed": 0.02
+      },
+      "top_panel": {
+        "panel": "top",
+        "bounds": {
+          "x": 0.2,
+          "y": 0.2,
+          "width": 0.6,
+          "height": 0.6
+        },
+        "rotation": 5,
+        "scale_mode": "fit",
+        "bleed": 0
+      }
+    }
+  },
+  "output": {
+    "resolution": {
+      "width": 1280,
+      "height": 720
+    },
+    "views": {
+      "front": "renders/box-mockup-phase3-001-front.png",
+      "angle": "renders/box-mockup-phase3-001-angle.png",
+      "closeup": "renders/box-mockup-phase3-001-closeup.png"
+    }
+  }
+}
