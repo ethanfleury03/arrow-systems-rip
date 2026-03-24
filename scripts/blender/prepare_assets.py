@@ -122,8 +122,8 @@ def validate_job(job: dict) -> list[str]:
     bg = scene.get("background")
     if isinstance(bg, dict):
         style = bg.get("style", "auto_contrast_studio")
-        if style not in ("auto_contrast_studio", "dual_tone", "flat"):
-            errors.append("scene.background.style must be one of: auto_contrast_studio|dual_tone|flat")
+        if style not in ("auto_contrast_studio", "dual_tone", "flat", "neutral_midgray"):
+            errors.append("scene.background.style must be one of: auto_contrast_studio|dual_tone|flat|neutral_midgray")
 
         for k in ("top_color", "bottom_color", "floor_tint"):
             if k in bg and not isinstance(bg.get(k), str):
@@ -149,6 +149,9 @@ def validate_job(job: dict) -> list[str]:
         "high_contrast",
     ):
         errors.append("scene.lighting_preset must be one of: premium_softbox|balanced_catalog|high_contrast")
+
+    if "safe_mode" in scene and not isinstance(scene.get("safe_mode"), bool):
+        errors.append("scene.safe_mode must be a boolean when provided")
 
     output = job.get("output", {})
     views = output.get("views")

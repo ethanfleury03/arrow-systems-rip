@@ -271,6 +271,11 @@ def compute_print_area_params(label_cfg: dict, image_aspect: float) -> dict:
     }
 
 
+def parse_safe_mode(job: dict) -> bool:
+    scene_cfg = job.get("scene", {}) if isinstance(job.get("scene"), dict) else {}
+    return bool(scene_cfg.get("safe_mode", False))
+
+
 def parse_scene_background(job: dict) -> dict:
     """Parse new/legacy background fields with robust defaults."""
     scene_cfg = job.get("scene", {}) if isinstance(job.get("scene"), dict) else {}
@@ -279,41 +284,41 @@ def parse_scene_background(job: dict) -> dict:
     # Legacy preset string support
     if isinstance(bg, str):
         key = bg.lower().strip()
-        if key in {"studio_gray", "gray", "neutral", "default"}:
+        if key in {"studio_gray", "gray", "neutral", "default", "neutral_midgray"}:
             return {
-                "style": "auto_contrast_studio",
-                "top_color": "#cfd4dc",
-                "bottom_color": "#9ea7b4",
-                "floor_tint": "#aeb6c1",
-                "floor_tint_intensity": 0.34,
+                "style": "neutral_midgray",
+                "top_color": "#8c8f96",
+                "bottom_color": "#666a72",
+                "floor_tint": "#777b84",
+                "floor_tint_intensity": 0.22,
             }
         if key in {"dark", "studio_dark"}:
             return {
-                "style": "auto_contrast_studio",
-                "top_color": "#bfc6d0",
-                "bottom_color": "#8b95a4",
-                "floor_tint": "#9aa4b3",
-                "floor_tint_intensity": 0.32,
+                "style": "neutral_midgray",
+                "top_color": "#81858d",
+                "bottom_color": "#5c6169",
+                "floor_tint": "#6f737c",
+                "floor_tint_intensity": 0.20,
             }
         if key in {"light", "studio_light"}:
             return {
-                "style": "auto_contrast_studio",
-                "top_color": "#d8dde4",
-                "bottom_color": "#adb6c2",
-                "floor_tint": "#bbc3cd",
-                "floor_tint_intensity": 0.30,
+                "style": "neutral_midgray",
+                "top_color": "#969aa2",
+                "bottom_color": "#71767f",
+                "floor_tint": "#7d828c",
+                "floor_tint_intensity": 0.18,
             }
 
     bg_obj = bg if isinstance(bg, dict) else {}
 
-    style = str(bg_obj.get("style", "auto_contrast_studio")).lower().strip()
-    if style not in {"auto_contrast_studio", "dual_tone", "flat"}:
-        style = "auto_contrast_studio"
+    style = str(bg_obj.get("style", "neutral_midgray")).lower().strip()
+    if style not in {"auto_contrast_studio", "dual_tone", "flat", "neutral_midgray"}:
+        style = "neutral_midgray"
 
-    top_color = str(bg_obj.get("top_color", "#cfd4dc"))
-    bottom_color = str(bg_obj.get("bottom_color", "#9ea7b4"))
-    floor_tint = str(bg_obj.get("floor_tint", "#aeb6c1"))
-    floor_tint_intensity = clamp(float(bg_obj.get("floor_tint_intensity", 0.34)), 0.0, 1.0)
+    top_color = str(bg_obj.get("top_color", "#8c8f96"))
+    bottom_color = str(bg_obj.get("bottom_color", "#666a72"))
+    floor_tint = str(bg_obj.get("floor_tint", "#777b84"))
+    floor_tint_intensity = clamp(float(bg_obj.get("floor_tint_intensity", 0.22)), 0.0, 1.0)
 
     return {
         "style": style,
@@ -643,7 +648,7 @@ def create_box_with_label_decal(bpy, job: dict, label_path: Path):
     return box_obj, (width, height, depth)
 
 
-def setup_background_world(bpy, bg_cfg: dict) -> None:
+def setup_background_world(bpy, bg_cfg: dict, safe_mode: bool = False) -> None:
     world = bpy.data.worlds.get("World")
     if not world:
         return
@@ -664,41 +669,36 @@ def setup_background_world(bpy, bg_cfg: dict) -> None:
 
     if bg_cfg["style"] == "flat":
         background.inputs[0].default_value = bg_top
-        background.inputs[1].default_value = 0.28
+        background.inputs[1].default_value = 0.20 if safe_mode else 0.24
         links.new(background.outputs["Background"], output.inputs["Surface"])
         return
 
     tex_coord = nodes.new(type="ShaderNodeTexCoord")
     tex_coord.location = (-720, 0)
 
-    mapping = nodes.new(type="ShaderNodeMapping")
-    mapping.location = (-540, 0)
-    mapping.inputs["Rotation"].default_value[0] = math.radians(90.0)
-
-    gradient = nodes.new(type="ShaderNodeTexGradient")
-    gradient.location = (-350, 0)
-    gradient.gradient_type = "LINEAR"
+    separate = nodes.new(type="ShaderNodeSeparateXYZ")
+    separate.location = (-540, 0)
 
     smooth = nodes.new(type="ShaderNodeMapRange")
-    smooth.location = (-170, 0)
-    smooth.inputs["From Min"].default_value = 0.2
-    smooth.inputs["From Max"].default_value = 0.88
+    smooth.location = (-350, 0)
+    smooth.inputs["From Min"].default_value = 0.35
+    smooth.inputs["From Max"].default_value = 0.55
     smooth.inputs["To Min"].default_value = 0.0
     smooth.inputs["To Max"].default_value = 1.0
     smooth.clamp = True
 
     ramp = nodes.new(type="ShaderNodeValToRGB")
-    ramp.location = (-10, 0)
+    ramp.location = (-160, 0)
+    ramp.color_ramp.interpolation = "LINEAR"
     ramp.color_ramp.elements[0].position = 0.0
     ramp.color_ramp.elements[0].color = bg_bottom
     ramp.color_ramp.elements[1].position = 1.0
     ramp.color_ramp.elements[1].color = bg_top
 
-    background.inputs[1].default_value = 0.30 if bg_cfg["style"] == "auto_contrast_studio" else 0.26
+    background.inputs[1].default_value = 0.18 if safe_mode else 0.22
 
-    links.new(tex_coord.outputs["Generated"], mapping.inputs["Vector"])
-    links.new(mapping.outputs["Vector"], gradient.inputs["Vector"])
-    links.new(gradient.outputs["Fac"], smooth.inputs["Value"])
+    links.new(tex_coord.outputs["Generated"], separate.inputs["Vector"])
+    links.new(separate.outputs["Z"], smooth.inputs["Value"])
     links.new(smooth.outputs["Result"], ramp.inputs["Fac"])
     links.new(ramp.outputs["Color"], background.inputs["Color"])
     links.new(background.outputs["Background"], output.inputs["Surface"])
@@ -709,8 +709,19 @@ def setup_lighting_and_world(bpy, dims: tuple[float, float, float], job: dict) -
 
     bg_cfg = parse_scene_background(job)
     presets = parse_presets(job)
+    safe_mode = parse_safe_mode(job)
 
-    setup_background_world(bpy, bg_cfg)
+    if safe_mode and bg_cfg.get("style") in {"auto_contrast_studio", "dual_tone"}:
+        bg_cfg = {
+            **bg_cfg,
+            "style": "neutral_midgray",
+            "top_color": "#8c8f96",
+            "bottom_color": "#666a72",
+            "floor_tint": "#777b84",
+            "floor_tint_intensity": 0.20,
+        }
+
+    setup_background_world(bpy, bg_cfg, safe_mode=safe_mode)
 
     floor_mix = clamp(bg_cfg["floor_tint_intensity"], 0.0, 1.0)
     floor_tint = hex_to_rgba(bg_cfg["floor_tint"])
@@ -728,47 +739,15 @@ def setup_lighting_and_world(bpy, dims: tuple[float, float, float], job: dict) -
     gbsdf.inputs["Specular IOR Level"].default_value = 0.08
     ground.data.materials.append(gmat)
 
-    # Back wall for clean studio two-tone read and color separation
-    bpy.ops.mesh.primitive_plane_add(size=6.5, location=(0.0, depth * 1.9, height * 1.3))
-    wall = bpy.context.object
-    wall.name = "BackdropWall"
-    wall.rotation_euler = (math.radians(90.0), 0.0, 0.0)
+    # Intentionally no backdrop wall plane. Rely only on world gradient + ground
+    # to avoid diagonal split artifacts from large planes/material projection.
 
-    wmat = bpy.data.materials.new(name="BackdropWallMaterial")
-    wmat.use_nodes = True
-    wnodes = wmat.node_tree.nodes
-    wlinks = wmat.node_tree.links
-
-    wall_bsdf = wnodes.get("Principled BSDF")
-    wall_output = wnodes.get("Material Output")
-    if wall_bsdf and wall_output:
-        wall_bsdf.inputs["Roughness"].default_value = 0.93
-        wall_bsdf.inputs["Specular IOR Level"].default_value = 0.0
-        wall_bsdf.inputs["Base Color"].default_value = lerp_color(
-            hex_to_rgba(bg_cfg["bottom_color"]),
-            hex_to_rgba(bg_cfg["top_color"]),
-            0.55,
-        )
-
-        if bg_cfg["style"] in {"auto_contrast_studio", "dual_tone"}:
-            tex_coord = wnodes.new(type="ShaderNodeTexCoord")
-            tex_coord.location = (-560, 40)
-            sep = wnodes.new(type="ShaderNodeSeparateXYZ")
-            sep.location = (-360, 40)
-            ramp = wnodes.new(type="ShaderNodeValToRGB")
-            ramp.location = (-170, 40)
-            ramp.color_ramp.elements[0].position = 0.18
-            ramp.color_ramp.elements[0].color = hex_to_rgba(bg_cfg["bottom_color"])
-            ramp.color_ramp.elements[1].position = 0.9
-            ramp.color_ramp.elements[1].color = hex_to_rgba(bg_cfg["top_color"])
-
-            wlinks.new(tex_coord.outputs["Object"], sep.inputs["Vector"])
-            wlinks.new(sep.outputs["Z"], ramp.inputs["Fac"])
-            wlinks.new(ramp.outputs["Color"], wall_bsdf.inputs["Base Color"])
-
-    wall.data.materials.append(wmat)
-
-    if presets["lighting_preset"] == "balanced_catalog":
+    if safe_mode:
+        key_energy = 620
+        fill_energy = 300
+        rim_energy = 250
+        top_energy = 95
+    elif presets["lighting_preset"] == "balanced_catalog":
         key_energy = 760
         fill_energy = 360
         rim_energy = 320
@@ -872,11 +851,13 @@ def _projected_bounds(scene, cam, corners):
 
     xs: list[float] = []
     ys: list[float] = []
+    zs: list[float] = []
     vis = 0
     for world_co in corners:
         co_ndc = world_to_camera_view(scene, cam, world_co)
         xs.append(float(co_ndc.x))
         ys.append(float(co_ndc.y))
+        zs.append(float(co_ndc.z))
         if co_ndc.z > 0.0:
             vis += 1
 
@@ -888,7 +869,19 @@ def _projected_bounds(scene, cam, corners):
         "span_x": max(xs) - min(xs),
         "span_y": max(ys) - min(ys),
         "visible": vis,
+        "min_z": min(zs),
     }
+
+
+def _is_projection_invalid(projected: dict, min_fill: float = 0.25, max_fill: float = 0.96) -> bool:
+    coverage = max(projected["span_x"], projected["span_y"])
+    if projected["visible"] < 8 or projected.get("min_z", 1.0) <= 0.0:
+        return True
+    if projected["min_x"] < -0.03 or projected["max_x"] > 1.03 or projected["min_y"] < -0.03 or projected["max_y"] > 1.03:
+        return True
+    if coverage < min_fill or coverage > max_fill:
+        return True
+    return False
 
 
 def _shot_profile(shot_name: str) -> dict:
@@ -899,7 +892,7 @@ def _shot_profile(shot_name: str) -> dict:
     return {"direction": (0.0, -1.0, 0.16), "target_fill": 0.76, "margin": 1.12}
 
 
-def _fit_camera_to_object(scene, cam, bbox: dict, shot_name: str, debug: bool = False) -> None:
+def _fit_camera_to_object(scene, cam, bbox: dict, shot_name: str, safe_mode: bool = False, debug: bool = False) -> None:
     from mathutils import Vector  # type: ignore
 
     profile = _shot_profile(shot_name)
@@ -920,32 +913,46 @@ def _fit_camera_to_object(scene, cam, bbox: dict, shot_name: str, debug: bool = 
     base_dist = (radius * float(profile["margin"])) / max(math.tan((fit_fov * target_fill) * 0.5), 0.08)
     dist = max(base_dist, radius * 1.4)
 
-    cam.location = center - (direction * dist)
-    cam.rotation_euler = (center - cam.location).to_track_quat("-Z", "Y").to_euler()
+    def apply_pose(view_dir: Vector, view_dist: float) -> None:
+        cam.location = center - (view_dir * view_dist)
+        cam.rotation_euler = (center - cam.location).to_track_quat("-Z", "Y").to_euler()
+        near_clip = max(0.01, view_dist - radius * 2.4)
+        far_clip = max(near_clip + 1.0, view_dist + radius * 6.0)
+        cam_data.clip_start = near_clip
+        cam_data.clip_end = far_clip
 
-    # One correction pass from projected bounds to avoid off-screen frames.
+    apply_pose(direction, dist)
+
+    # One correction pass from projected bounds to avoid off-screen/blank frames.
     projected = _projected_bounds(scene, cam, bbox["corners"])
     max_span = max(projected["span_x"], projected["span_y"], 0.01)
-    if projected["visible"] < 8 or projected["min_x"] < -0.02 or projected["max_x"] > 1.02 or projected["min_y"] < -0.02 or projected["max_y"] > 1.02:
-        dist *= 1.18
+    if _is_projection_invalid(projected, min_fill=0.30 if safe_mode else 0.25):
+        dist *= 1.22
     else:
         ratio = max_span / target_fill
         dist *= clamp(ratio, 0.82, 1.28)
 
-    cam.location = center - (direction * dist)
-    cam.rotation_euler = (center - cam.location).to_track_quat("-Z", "Y").to_euler()
+    apply_pose(direction, dist)
 
-    near_clip = max(0.01, dist - radius * 2.4)
-    far_clip = max(near_clip + 1.0, dist + radius * 6.0)
-    cam_data.clip_start = near_clip
-    cam_data.clip_end = far_clip
+    # Emergency deterministic fallback: front-ish safe orbit around object center.
+    projected = _projected_bounds(scene, cam, bbox["corners"])
+    if _is_projection_invalid(projected, min_fill=0.30 if safe_mode else 0.25):
+        fallback_dirs = {
+            "front": Vector((0.0, -1.0, 0.18)),
+            "angle": Vector((0.72, -1.0, 0.22)),
+            "closeup": Vector((0.24, -1.0, 0.16)),
+        }
+        fallback_dir = fallback_dirs.get(shot_name, Vector((0.0, -1.0, 0.2))).normalized()
+        fallback_dist = max((radius / max(math.tan((fit_fov * 0.72) * 0.5), 0.08)) * 1.24, radius * 1.8)
+        apply_pose(fallback_dir, fallback_dist)
+        dist = fallback_dist
 
     projected = _projected_bounds(scene, cam, bbox["corners"])
     if debug:
         print(
             f"[debug] {shot_name}: bbox_size=({bbox['size'].x:.4f},{bbox['size'].y:.4f},{bbox['size'].z:.4f}) "
             f"center=({center.x:.4f},{center.y:.4f},{center.z:.4f}) cam=({cam.location.x:.4f},{cam.location.y:.4f},{cam.location.z:.4f}) "
-            f"dist={dist:.4f} clip=({near_clip:.4f},{far_clip:.4f}) proj=({projected['min_x']:.3f},{projected['min_y']:.3f})-({projected['max_x']:.3f},{projected['max_y']:.3f}) "
+            f"dist={dist:.4f} clip=({cam_data.clip_start:.4f},{cam_data.clip_end:.4f}) proj=({projected['min_x']:.3f},{projected['min_y']:.3f})-({projected['max_x']:.3f},{projected['max_y']:.3f}) "
             f"span=({projected['span_x']:.3f},{projected['span_y']:.3f}) vis={projected['visible']}/8"
         )
 
@@ -1001,9 +1008,10 @@ def render_with_blender(job: dict, job_path: Path, debug: bool = False) -> dict[
 
     scene = bpy.context.scene
     debug_enabled = bool(debug or get_float(job, ["scene", "debug"], 0.0) >= 0.5)
+    safe_mode = parse_safe_mode(job)
     bbox = _world_bbox(scene, box_obj)
     for view_name in ["front", "angle", "closeup"]:
-        _fit_camera_to_object(scene, cams[view_name], bbox, view_name, debug_enabled)
+        _fit_camera_to_object(scene, cams[view_name], bbox, view_name, safe_mode=safe_mode, debug=debug_enabled)
         scene.camera = cams[view_name]
         scene.render.filepath = str(render_paths[view_name].resolve())
         bpy.ops.render.render(write_still=True)

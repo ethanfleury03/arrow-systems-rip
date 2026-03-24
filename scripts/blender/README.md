@@ -2,19 +2,20 @@
 
 ## Phase 3.1 art direction (color-agnostic studio)
 
-Renderer now defaults to an **auto-contrast studio background** so white, black, and saturated product colors all stay readable.
+Renderer now defaults to a **neutral mid-gray background** (when `scene.safe_mode=true`) so white, black, and saturated product colors all stay readable without harsh diagonals.
 
 ### New scene fields
 
 ```json
 {
   "scene": {
+    "safe_mode": true,
     "background": {
-      "style": "auto_contrast_studio",
-      "top_color": "#cfd4dc",
-      "bottom_color": "#9ea7b4",
-      "floor_tint": "#aeb6c1",
-      "floor_tint_intensity": 0.34
+      "style": "neutral_midgray",
+      "top_color": "#8c8f96",
+      "bottom_color": "#666a72",
+      "floor_tint": "#777b84",
+      "floor_tint_intensity": 0.20
     },
     "camera_preset": "phase3_three_view_realistic",
     "lighting_preset": "premium_softbox"
@@ -25,11 +26,19 @@ Renderer now defaults to an **auto-contrast studio background** so white, black,
 #### `scene.background`
 - Legacy string still supported (ex: `"studio_gray"`).
 - Object form fields:
-  - `style`: `auto_contrast_studio` (default) | `dual_tone` | `flat`
+  - `style`: `neutral_midgray` (default) | `auto_contrast_studio` | `dual_tone` | `flat`
   - `top_color`: hex color (top/background high tone)
   - `bottom_color`: hex color (horizon/lower backdrop tone)
   - `floor_tint`: hex color blended into ground for contact realism
   - `floor_tint_intensity`: `0..1` blend amount
+
+#### `scene.safe_mode`
+- Optional boolean (recommended `true` for phase 3 examples).
+- When enabled, forces conservative defaults:
+  - neutral mid-gray world background
+  - softer world strength + light energies
+  - per-shot camera correction + emergency fallback orbit
+  - no backdrop wall plane (avoids giant diagonal split artifacts)
 
 #### Presets
 - `scene.camera_preset`:
@@ -109,7 +118,27 @@ blender -b -P scripts/blender/render_box_mockup.py -- --job scripts/blender/exam
 
 What to tune (in `scene`):
 - `lighting.intensity_scale` (recommended range `0.7` to `1.0`)
-- `background.top_color` / `background.bottom_color` (avoid near-white like `#fdfdfd`)
+- `background.top_color` / `background.bottom_color` (keep subtle: mid-gray range)
 - `lighting_preset` (`premium_softbox` is safest default)
 
-The renderer now computes camera placement from world bounding box per shot and runs a projected-bounds correction pass, so the product should stay in-frame even when box dimensions change.
+Copy/paste neutral-background tuning block:
+
+```json
+{
+  "scene": {
+    "safe_mode": true,
+    "background": {
+      "style": "neutral_midgray",
+      "top_color": "#8c8f96",
+      "bottom_color": "#666a72",
+      "floor_tint": "#777b84",
+      "floor_tint_intensity": 0.20
+    },
+    "lighting": {
+      "intensity_scale": 0.9
+    }
+  }
+}
+```
+
+The renderer computes camera placement from the object world bounding box before each shot, performs one auto-reframe correction if coverage/visibility is invalid, and finally applies a deterministic fallback orbit if still invalid, so the product stays in-frame.
