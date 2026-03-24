@@ -3,15 +3,15 @@
   "scene": {
     "background": {
       "style": "auto_contrast_studio",
-      "top_color": "#f2f4f7",
-      "bottom_color": "#c8cfd8",
-      "floor_tint": "#d4dbe4",
-      "floor_tint_intensity": 0.42
+      "top_color": "#cfd4dc",
+      "bottom_color": "#9ea7b4",
+      "floor_tint": "#aeb6c1",
+      "floor_tint_intensity": 0.34
     },
     "camera_preset": "phase3_three_view_realistic",
-    "lighting_preset": "balanced_catalog",
+    "lighting_preset": "premium_softbox",
     "lighting": {
-      "intensity_scale": 0.95
+      "intensity_scale": 0.9
     },
     "color_management": {
       "view_transform": "AgX",

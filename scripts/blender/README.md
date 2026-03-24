@@ -11,10 +11,10 @@ Renderer now defaults to an **auto-contrast studio background** so white, black,
   "scene": {
     "background": {
       "style": "auto_contrast_studio",
-      "top_color": "#f2f4f7",
-      "bottom_color": "#c8cfd8",
-      "floor_tint": "#d4dbe4",
-      "floor_tint_intensity": 0.42
+      "top_color": "#cfd4dc",
+      "bottom_color": "#9ea7b4",
+      "floor_tint": "#aeb6c1",
+      "floor_tint_intensity": 0.34
     },
     "camera_preset": "phase3_three_view_realistic",
     "lighting_preset": "premium_softbox"
@@ -98,3 +98,18 @@ python3 scripts/blender/prepare_assets.py --job scripts/blender/examples/box_job
 ```bash
 ./scripts/blender/run_blender_headless.sh scripts/blender/examples/box_job.phase3.example.json
 ```
+
+## If render is blank (white/black frame)
+
+Use diagnostics first:
+
+```bash
+blender -b -P scripts/blender/render_box_mockup.py -- --job scripts/blender/examples/box_job.phase3.example.json --debug
+```
+
+What to tune (in `scene`):
+- `lighting.intensity_scale` (recommended range `0.7` to `1.0`)
+- `background.top_color` / `background.bottom_color` (avoid near-white like `#fdfdfd`)
+- `lighting_preset` (`premium_softbox` is safest default)
+
+The renderer now computes camera placement from world bounding box per shot and runs a projected-bounds correction pass, so the product should stay in-frame even when box dimensions change.

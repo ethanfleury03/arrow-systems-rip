@@ -22,6 +22,7 @@ DEFAULT_REPO_ROOT = SCRIPT_PATH.parents[2]
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render a box label mockup in Blender")
     parser.add_argument("--job", required=True, help="Path to job JSON")
+    parser.add_argument("--debug", action="store_true", help="Enable render diagnostics")
     return parser.parse_args(argv)
 
 
@@ -281,26 +282,26 @@ def parse_scene_background(job: dict) -> dict:
         if key in {"studio_gray", "gray", "neutral", "default"}:
             return {
                 "style": "auto_contrast_studio",
-                "top_color": "#f1f3f6",
-                "bottom_color": "#c8ced6",
-                "floor_tint": "#d5dbe2",
-                "floor_tint_intensity": 0.42,
+                "top_color": "#cfd4dc",
+                "bottom_color": "#9ea7b4",
+                "floor_tint": "#aeb6c1",
+                "floor_tint_intensity": 0.34,
             }
         if key in {"dark", "studio_dark"}:
             return {
                 "style": "auto_contrast_studio",
-                "top_color": "#dfe5ec",
-                "bottom_color": "#b0b9c4",
-                "floor_tint": "#c0c8d2",
-                "floor_tint_intensity": 0.38,
+                "top_color": "#bfc6d0",
+                "bottom_color": "#8b95a4",
+                "floor_tint": "#9aa4b3",
+                "floor_tint_intensity": 0.32,
             }
         if key in {"light", "studio_light"}:
             return {
                 "style": "auto_contrast_studio",
-                "top_color": "#f8f9fb",
-                "bottom_color": "#d8dde4",
-                "floor_tint": "#e3e7ed",
-                "floor_tint_intensity": 0.33,
+                "top_color": "#d8dde4",
+                "bottom_color": "#adb6c2",
+                "floor_tint": "#bbc3cd",
+                "floor_tint_intensity": 0.30,
             }
 
     bg_obj = bg if isinstance(bg, dict) else {}
@@ -309,10 +310,10 @@ def parse_scene_background(job: dict) -> dict:
     if style not in {"auto_contrast_studio", "dual_tone", "flat"}:
         style = "auto_contrast_studio"
 
-    top_color = str(bg_obj.get("top_color", "#f1f3f6"))
-    bottom_color = str(bg_obj.get("bottom_color", "#c8ced6"))
-    floor_tint = str(bg_obj.get("floor_tint", "#d5dbe2"))
-    floor_tint_intensity = clamp(float(bg_obj.get("floor_tint_intensity", 0.42)), 0.0, 1.0)
+    top_color = str(bg_obj.get("top_color", "#cfd4dc"))
+    bottom_color = str(bg_obj.get("bottom_color", "#9ea7b4"))
+    floor_tint = str(bg_obj.get("floor_tint", "#aeb6c1"))
+    floor_tint_intensity = clamp(float(bg_obj.get("floor_tint_intensity", 0.34)), 0.0, 1.0)
 
     return {
         "style": style,
@@ -663,7 +664,7 @@ def setup_background_world(bpy, bg_cfg: dict) -> None:
 
     if bg_cfg["style"] == "flat":
         background.inputs[0].default_value = bg_top
-        background.inputs[1].default_value = 0.42
+        background.inputs[1].default_value = 0.28
         links.new(background.outputs["Background"], output.inputs["Surface"])
         return
 
@@ -693,7 +694,7 @@ def setup_background_world(bpy, bg_cfg: dict) -> None:
     ramp.color_ramp.elements[1].position = 1.0
     ramp.color_ramp.elements[1].color = bg_top
 
-    background.inputs[1].default_value = 0.55 if bg_cfg["style"] == "auto_contrast_studio" else 0.48
+    background.inputs[1].default_value = 0.30 if bg_cfg["style"] == "auto_contrast_studio" else 0.26
 
     links.new(tex_coord.outputs["Generated"], mapping.inputs["Vector"])
     links.new(mapping.outputs["Vector"], gradient.inputs["Vector"])
@@ -768,30 +769,30 @@ def setup_lighting_and_world(bpy, dims: tuple[float, float, float], job: dict) -
     wall.data.materials.append(wmat)
 
     if presets["lighting_preset"] == "balanced_catalog":
-        key_energy = 980
-        fill_energy = 520
-        rim_energy = 420
-        top_energy = 180
-    elif presets["lighting_preset"] == "high_contrast":
-        key_energy = 1380
+        key_energy = 760
         fill_energy = 360
-        rim_energy = 620
-        top_energy = 140
+        rim_energy = 320
+        top_energy = 120
+    elif presets["lighting_preset"] == "high_contrast":
+        key_energy = 980
+        fill_energy = 260
+        rim_energy = 420
+        top_energy = 90
     else:  # premium_softbox default
-        key_energy = 1200
-        fill_energy = 560
-        rim_energy = 500
-        top_energy = 220
+        key_energy = 860
+        fill_energy = 390
+        rim_energy = 360
+        top_energy = 130
 
     ref_diag = math.sqrt((0.12**2) + (0.18**2) + (0.06**2))
     obj_diag = max(math.sqrt(width * width + height * height + depth * depth), 0.01)
     size_scale = clamp(ref_diag / obj_diag, 0.55, 1.5)
-    light_scale = clamp(get_float(job, ["scene", "lighting", "intensity_scale"], 1.0), 0.5, 1.35)
+    light_scale = clamp(get_float(job, ["scene", "lighting", "intensity_scale"], 1.0), 0.5, 1.15)
 
-    key_energy = clamp(key_energy * size_scale * light_scale, 280.0, 1450.0)
-    fill_energy = clamp(fill_energy * size_scale * light_scale, 120.0, 760.0)
-    rim_energy = clamp(rim_energy * size_scale * light_scale, 120.0, 820.0)
-    top_energy = clamp(top_energy * size_scale * light_scale, 60.0, 320.0)
+    key_energy = clamp(key_energy * size_scale * light_scale, 200.0, 980.0)
+    fill_energy = clamp(fill_energy * size_scale * light_scale, 90.0, 520.0)
+    rim_energy = clamp(rim_energy * size_scale * light_scale, 90.0, 560.0)
+    top_energy = clamp(top_energy * size_scale * light_scale, 45.0, 190.0)
 
     # Key light
     bpy.ops.object.light_add(type="AREA", location=(width * 2.45, -(depth * 2.75), height * 2.2))
@@ -822,145 +823,131 @@ def setup_lighting_and_world(bpy, dims: tuple[float, float, float], job: dict) -
     top.data.size = 2.8
 
 
-def add_camera(bpy, name: str, location: tuple[float, float, float], rotation: tuple[float, float, float], lens: float):
-    bpy.ops.object.camera_add(location=location, rotation=rotation)
+def add_camera(bpy, name: str, lens: float):
+    bpy.ops.object.camera_add(location=(0.0, -1.0, 0.6), rotation=(0.0, 0.0, 0.0))
     cam = bpy.context.object
     cam.name = name
     cam.data.lens = lens
     return cam
 
 
-def setup_cameras(bpy, dims: tuple[float, float, float], job: dict):
-    width, height, depth = dims
+def setup_cameras(bpy, job: dict):
     preset = parse_presets(job)["camera_preset"]
 
     if preset == "phase2_three_view":
         return {
-            "front": add_camera(
-                bpy,
-                "CamFront",
-                (0.0, -(depth * 3.0 + 0.28), height * 0.60),
-                (1.535, 0.0, 0.0),
-                70.0,
-            ),
-            "angle": add_camera(
-                bpy,
-                "CamAngle",
-                (width * 2.15 + 0.24, -(depth * 2.35 + 0.20), height * 0.80),
-                (1.16, 0.0, 0.94),
-                58.0,
-            ),
-            "closeup": add_camera(
-                bpy,
-                "CamCloseup",
-                (0.0, -(depth * 1.35 + 0.08), height * 0.58),
-                (1.54, 0.0, 0.0),
-                85.0,
-            ),
+            "front": add_camera(bpy, "CamFront", 70.0),
+            "angle": add_camera(bpy, "CamAngle", 58.0),
+            "closeup": add_camera(bpy, "CamCloseup", 85.0),
         }
 
     if preset == "product_studio_balanced":
         return {
-            "front": add_camera(
-                bpy,
-                "CamFront",
-                (0.0, -(depth * 2.95 + 0.30), height * 0.62),
-                (1.525, 0.0, 0.0),
-                74.0,
-            ),
-            "angle": add_camera(
-                bpy,
-                "CamAngle",
-                (width * 2.35 + 0.26, -(depth * 2.15 + 0.24), height * 0.82),
-                (1.13, 0.0, 0.92),
-                62.0,
-            ),
-            "closeup": add_camera(
-                bpy,
-                "CamCloseup",
-                (0.0, -(depth * 1.25 + 0.09), height * 0.62),
-                (1.535, 0.0, 0.0),
-                90.0,
-            ),
+            "front": add_camera(bpy, "CamFront", 74.0),
+            "angle": add_camera(bpy, "CamAngle", 62.0),
+            "closeup": add_camera(bpy, "CamCloseup", 90.0),
         }
 
-    # phase3_three_view_realistic default
     return {
-        "front": add_camera(
-            bpy,
-            "CamFront",
-            (0.0, -(depth * 3.1 + 0.30), height * 0.62),
-            (1.525, 0.0, 0.0),
-            72.0,
-        ),
-        "angle": add_camera(
-            bpy,
-            "CamAngle",
-            (width * 2.42 + 0.28, -(depth * 2.05 + 0.25), height * 0.84),
-            (1.11, 0.0, 0.905),
-            60.0,
-        ),
-        "closeup": add_camera(
-            bpy,
-            "CamCloseup",
-            (0.0, -(depth * 1.20 + 0.10), height * 0.64),
-            (1.53, 0.0, 0.0),
-            92.0,
-        ),
+        "front": add_camera(bpy, "CamFront", 72.0),
+        "angle": add_camera(bpy, "CamAngle", 60.0),
+        "closeup": add_camera(bpy, "CamCloseup", 92.0),
     }
 
 
-def _camera_visible_bbox_points(scene, cam, obj) -> int:
-    try:
-        from bpy_extras.object_utils import world_to_camera_view  # type: ignore
-        from mathutils import Vector  # type: ignore
-    except Exception:
-        return 8
+def _world_bbox(scene, obj):
+    from mathutils import Vector  # type: ignore
 
-    visible = 0
-    for corner in obj.bound_box:
-        world_co = obj.matrix_world @ Vector(corner)
+    corners = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
+    min_v = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
+    max_v = Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners)))
+    center = (min_v + max_v) * 0.5
+    size = max_v - min_v
+    radius = max(size.length * 0.5, 0.02)
+    return {"corners": corners, "min": min_v, "max": max_v, "center": center, "size": size, "radius": radius}
+
+
+def _projected_bounds(scene, cam, corners):
+    from bpy_extras.object_utils import world_to_camera_view  # type: ignore
+
+    xs: list[float] = []
+    ys: list[float] = []
+    vis = 0
+    for world_co in corners:
         co_ndc = world_to_camera_view(scene, cam, world_co)
-        if co_ndc.z > 0.0 and -0.1 <= co_ndc.x <= 1.1 and -0.1 <= co_ndc.y <= 1.1:
-            visible += 1
-    return visible
+        xs.append(float(co_ndc.x))
+        ys.append(float(co_ndc.y))
+        if co_ndc.z > 0.0:
+            vis += 1
+
+    return {
+        "min_x": min(xs),
+        "max_x": max(xs),
+        "min_y": min(ys),
+        "max_y": max(ys),
+        "span_x": max(xs) - min(xs),
+        "span_y": max(ys) - min(ys),
+        "visible": vis,
+    }
 
 
-def apply_camera_fallback(scene, cam, obj, dims: tuple[float, float, float], shot_name: str) -> None:
-    try:
-        from mathutils import Vector  # type: ignore
-    except Exception:
-        return
-
-    cam.data.clip_start = 0.01
-    cam.data.clip_end = 100.0
-
-    visible = _camera_visible_bbox_points(scene, cam, obj)
-    if visible >= 4:
-        return
-
-    width, height, depth = dims
-    center = obj.matrix_world.translation
-    radius = 0.5 * math.sqrt(width * width + height * height + depth * depth)
-
+def _shot_profile(shot_name: str) -> dict:
     if shot_name == "angle":
-        direction = Vector((0.95, -1.0, 0.34)).normalized()
-        framing = 1.15
-    elif shot_name == "closeup":
-        direction = Vector((0.0, -1.0, 0.08)).normalized()
-        framing = 0.82
-    else:
-        direction = Vector((0.0, -1.0, 0.22)).normalized()
-        framing = 1.02
+        return {"direction": (0.92, -1.0, 0.24), "target_fill": 0.70, "margin": 1.16}
+    if shot_name == "closeup":
+        return {"direction": (0.0, -1.0, 0.06), "target_fill": 0.88, "margin": 1.08}
+    return {"direction": (0.0, -1.0, 0.16), "target_fill": 0.76, "margin": 1.12}
 
-    lens = max(float(cam.data.lens), 1.0)
-    sensor = max(float(getattr(cam.data, "sensor_width", 36.0)), 1.0)
-    fov = 2.0 * math.atan(sensor / (2.0 * lens))
-    dist = max((radius * framing) / max(math.tan(fov * 0.45), 0.08), radius * 1.6)
+
+def _fit_camera_to_object(scene, cam, bbox: dict, shot_name: str, debug: bool = False) -> None:
+    from mathutils import Vector  # type: ignore
+
+    profile = _shot_profile(shot_name)
+    direction = Vector(profile["direction"]).normalized()
+    center = bbox["center"]
+    radius = bbox["radius"]
+
+    cam_data = cam.data
+    sensor_w = max(float(getattr(cam_data, "sensor_width", 36.0)), 1.0)
+    sensor_h = max(float(getattr(cam_data, "sensor_height", 24.0)), 1.0)
+    lens = max(float(cam_data.lens), 1.0)
+
+    fov_x = 2.0 * math.atan(sensor_w / (2.0 * lens))
+    fov_y = 2.0 * math.atan(sensor_h / (2.0 * lens))
+    fit_fov = min(fov_x, fov_y)
+
+    target_fill = clamp(float(profile["target_fill"]), 0.55, 0.92)
+    base_dist = (radius * float(profile["margin"])) / max(math.tan((fit_fov * target_fill) * 0.5), 0.08)
+    dist = max(base_dist, radius * 1.4)
 
     cam.location = center - (direction * dist)
-    look_quat = (center - cam.location).to_track_quat("-Z", "Y")
-    cam.rotation_euler = look_quat.to_euler()
+    cam.rotation_euler = (center - cam.location).to_track_quat("-Z", "Y").to_euler()
+
+    # One correction pass from projected bounds to avoid off-screen frames.
+    projected = _projected_bounds(scene, cam, bbox["corners"])
+    max_span = max(projected["span_x"], projected["span_y"], 0.01)
+    if projected["visible"] < 8 or projected["min_x"] < -0.02 or projected["max_x"] > 1.02 or projected["min_y"] < -0.02 or projected["max_y"] > 1.02:
+        dist *= 1.18
+    else:
+        ratio = max_span / target_fill
+        dist *= clamp(ratio, 0.82, 1.28)
+
+    cam.location = center - (direction * dist)
+    cam.rotation_euler = (center - cam.location).to_track_quat("-Z", "Y").to_euler()
+
+    near_clip = max(0.01, dist - radius * 2.4)
+    far_clip = max(near_clip + 1.0, dist + radius * 6.0)
+    cam_data.clip_start = near_clip
+    cam_data.clip_end = far_clip
+
+    projected = _projected_bounds(scene, cam, bbox["corners"])
+    if debug:
+        print(
+            f"[debug] {shot_name}: bbox_size=({bbox['size'].x:.4f},{bbox['size'].y:.4f},{bbox['size'].z:.4f}) "
+            f"center=({center.x:.4f},{center.y:.4f},{center.z:.4f}) cam=({cam.location.x:.4f},{cam.location.y:.4f},{cam.location.z:.4f}) "
+            f"dist={dist:.4f} clip=({near_clip:.4f},{far_clip:.4f}) proj=({projected['min_x']:.3f},{projected['min_y']:.3f})-({projected['max_x']:.3f},{projected['max_y']:.3f}) "
+            f"span=({projected['span_x']:.3f},{projected['span_y']:.3f}) vis={projected['visible']}/8"
+        )
 
 
 def configure_render_settings(bpy, job: dict):
@@ -991,7 +978,7 @@ def configure_render_settings(bpy, job: dict):
         eevee.use_bloom = False
 
 
-def render_with_blender(job: dict, job_path: Path) -> dict[str, Path]:
+def render_with_blender(job: dict, job_path: Path, debug: bool = False) -> dict[str, Path]:
     try:
         import bpy  # type: ignore
     except ImportError as e:
@@ -1009,12 +996,14 @@ def render_with_blender(job: dict, job_path: Path) -> dict[str, Path]:
     bpy.ops.wm.read_factory_settings(use_empty=True)
     box_obj, dims = create_box_with_label_decal(bpy, job, label_path)
     setup_lighting_and_world(bpy, dims, job)
-    cams = setup_cameras(bpy, dims, job)
+    cams = setup_cameras(bpy, job)
     configure_render_settings(bpy, job)
 
     scene = bpy.context.scene
+    debug_enabled = bool(debug or get_float(job, ["scene", "debug"], 0.0) >= 0.5)
+    bbox = _world_bbox(scene, box_obj)
     for view_name in ["front", "angle", "closeup"]:
-        apply_camera_fallback(scene, cams[view_name], box_obj, dims, view_name)
+        _fit_camera_to_object(scene, cams[view_name], bbox, view_name, debug_enabled)
         scene.camera = cams[view_name]
         scene.render.filepath = str(render_paths[view_name].resolve())
         bpy.ops.render.render(write_still=True)
@@ -1035,7 +1024,7 @@ def main() -> int:
         if not job_path.is_absolute():
             job_path = (Path.cwd() / job_path).absolute()
         job = load_job(job_path)
-        outputs = render_with_blender(job, job_path)
+        outputs = render_with_blender(job, job_path, args.debug)
         print("[ok] Render complete:")
         for key, path in outputs.items():
             print(f"  - {key}: {path}")
