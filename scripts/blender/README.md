@@ -1,10 +1,53 @@
 # Blender Box Mockup Pipeline
 
+## Phase 3.1 art direction (color-agnostic studio)
+
+Renderer now defaults to an **auto-contrast studio background** so white, black, and saturated product colors all stay readable.
+
+### New scene fields
+
+```json
+{
+  "scene": {
+    "background": {
+      "style": "auto_contrast_studio",
+      "top_color": "#f2f4f7",
+      "bottom_color": "#c8cfd8",
+      "floor_tint": "#d4dbe4",
+      "floor_tint_intensity": 0.42
+    },
+    "camera_preset": "phase3_three_view_realistic",
+    "lighting_preset": "premium_softbox"
+  }
+}
+```
+
+#### `scene.background`
+- Legacy string still supported (ex: `"studio_gray"`).
+- Object form fields:
+  - `style`: `auto_contrast_studio` (default) | `dual_tone` | `flat`
+  - `top_color`: hex color (top/background high tone)
+  - `bottom_color`: hex color (horizon/lower backdrop tone)
+  - `floor_tint`: hex color blended into ground for contact realism
+  - `floor_tint_intensity`: `0..1` blend amount
+
+#### Presets
+- `scene.camera_preset`:
+  - `phase3_three_view_realistic` (default)
+  - `product_studio_balanced`
+  - `phase2_three_view` (legacy framing)
+- `scene.lighting_preset`:
+  - `premium_softbox` (default)
+  - `balanced_catalog`
+  - `high_contrast`
+
+Lighting rig includes key/fill/rim/top lights and a contact-shadow ground plane for consistent separation.
+
 ## Phase 3 placement model
 
-The renderer now applies the label directly onto the box material (decal/overlay), not as a floating plane.
+Label is applied directly onto the box material (decal/overlay), not as a floating plane.
 
-### New job fields (`label.print_area`)
+### `label.print_area`
 
 ```json
 {
@@ -21,25 +64,28 @@ The renderer now applies the label directly onto the box material (decal/overlay
 ```
 
 - `panel`: `front` | `side` | `top` (default `front`)
-- `bounds` (normalized 0..1) or direct `x/y/width/height`
+- `bounds` (normalized `0..1`) or direct `x/y/width/height`
 - `rotation`: degrees
 - `scale_mode`: `fit` or `fill`
-- `bleed`: normalized expansion (0..0.49)
+- `bleed`: normalized expansion (`0..0.49`)
 
-### Backward compatibility
+## Backward compatibility
 
-Legacy Phase 2 fields are still accepted and mapped automatically:
-
+Legacy Phase 2 fields still work and are auto-mapped:
 - `label.target_face`
 - `label.placement.center_x / center_y`
 - `label.scale.width / height`
+
+Legacy scene values still work:
+- `scene.background: "studio_gray"`
+- `scene.camera_preset: "phase2_three_view"`
 
 Existing `scripts/blender/examples/box_job.phase2.example.json` remains valid.
 
 ## Examples
 
 - Legacy: `scripts/blender/examples/box_job.phase2.example.json`
-- New Phase 3: `scripts/blender/examples/box_job.phase3.example.json`
+- New Phase 3.1: `scripts/blender/examples/box_job.phase3.example.json`
 
 ## Validate assets
 

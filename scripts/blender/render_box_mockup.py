@@ -78,6 +78,20 @@ def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+def lerp_color(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+    t: float,
+) -> tuple[float, float, float, float]:
+    tt = clamp(t, 0.0, 1.0)
+    return (
+        a[0] + (b[0] - a[0]) * tt,
+        a[1] + (b[1] - a[1]) * tt,
+        a[2] + (b[2] - a[2]) * tt,
+        a[3] + (b[3] - a[3]) * tt,
+    )
+
+
 def get_dimensions_m(job: dict) -> tuple[float, float, float]:
     dims = job.get("box", {}).get("dimensions_mm", {})
     width = mm_to_m(dims.get("width", 120))
@@ -242,6 +256,75 @@ def compute_print_area_params(label_cfg: dict, image_aspect: float) -> dict:
         "content_w": content_w,
         "content_h": content_h,
     }
+
+
+def parse_scene_background(job: dict) -> dict:
+    """Parse new/legacy background fields with robust defaults."""
+    scene_cfg = job.get("scene", {}) if isinstance(job.get("scene"), dict) else {}
+    bg = scene_cfg.get("background", "studio_gray")
+
+    # Legacy preset string support
+    if isinstance(bg, str):
+        key = bg.lower().strip()
+        if key in {"studio_gray", "gray", "neutral", "default"}:
+            return {
+                "style": "auto_contrast_studio",
+                "top_color": "#f1f3f6",
+                "bottom_color": "#c8ced6",
+                "floor_tint": "#d5dbe2",
+                "floor_tint_intensity": 0.42,
+            }
+        if key in {"dark", "studio_dark"}:
+            return {
+                "style": "auto_contrast_studio",
+                "top_color": "#dfe5ec",
+                "bottom_color": "#b0b9c4",
+                "floor_tint": "#c0c8d2",
+                "floor_tint_intensity": 0.38,
+            }
+        if key in {"light", "studio_light"}:
+            return {
+                "style": "auto_contrast_studio",
+                "top_color": "#f8f9fb",
+                "bottom_color": "#d8dde4",
+                "floor_tint": "#e3e7ed",
+                "floor_tint_intensity": 0.33,
+            }
+
+    bg_obj = bg if isinstance(bg, dict) else {}
+
+    style = str(bg_obj.get("style", "auto_contrast_studio")).lower().strip()
+    if style not in {"auto_contrast_studio", "dual_tone", "flat"}:
+        style = "auto_contrast_studio"
+
+    top_color = str(bg_obj.get("top_color", "#f1f3f6"))
+    bottom_color = str(bg_obj.get("bottom_color", "#c8ced6"))
+    floor_tint = str(bg_obj.get("floor_tint", "#d5dbe2"))
+    floor_tint_intensity = clamp(float(bg_obj.get("floor_tint_intensity", 0.42)), 0.0, 1.0)
+
+    return {
+        "style": style,
+        "top_color": top_color,
+        "bottom_color": bottom_color,
+        "floor_tint": floor_tint,
+        "floor_tint_intensity": floor_tint_intensity,
+    }
+
+
+def parse_presets(job: dict) -> dict:
+    scene_cfg = job.get("scene", {}) if isinstance(job.get("scene"), dict) else {}
+    camera_preset = str(scene_cfg.get("camera_preset", "phase3_three_view_realistic")).lower().strip()
+    lighting_preset = str(scene_cfg.get("lighting_preset", "premium_softbox")).lower().strip()
+
+    if camera_preset in {"phase2_three_view", "legacy"}:
+        camera_preset = "phase2_three_view"
+    elif camera_preset not in {"phase3_three_view_realistic", "product_studio_balanced"}:
+        camera_preset = "phase3_three_view_realistic"
+
+    if lighting_preset not in {"premium_softbox", "balanced_catalog", "high_contrast"}:
+        lighting_preset = "premium_softbox"
+
+    return {"camera_preset": camera_preset, "lighting_preset": lighting_preset}
 
 
 def build_box_material_with_decal(bpy, job: dict, label_path: Path, box_obj):
@@ -505,42 +588,174 @@ def create_box_with_label_decal(bpy, job: dict, label_path: Path):
     return box_obj, (width, height, depth)
 
 
-def setup_lighting_and_world(bpy, dims: tuple[float, float, float]) -> None:
+def setup_background_world(bpy, bg_cfg: dict) -> None:
+    world = bpy.data.worlds.get("World")
+    if not world:
+        return
+
+    world.use_nodes = True
+    nodes = world.node_tree.nodes
+    links = world.node_tree.links
+    nodes.clear()
+
+    output = nodes.new(type="ShaderNodeOutputWorld")
+    output.location = (320, 0)
+
+    background = nodes.new(type="ShaderNodeBackground")
+    background.location = (100, 0)
+
+    bg_top = hex_to_rgba(bg_cfg["top_color"])
+    bg_bottom = hex_to_rgba(bg_cfg["bottom_color"])
+
+    if bg_cfg["style"] == "flat":
+        background.inputs[0].default_value = bg_top
+        background.inputs[1].default_value = 0.42
+        links.new(background.outputs["Background"], output.inputs["Surface"])
+        return
+
+    tex_coord = nodes.new(type="ShaderNodeTexCoord")
+    tex_coord.location = (-720, 0)
+
+    mapping = nodes.new(type="ShaderNodeMapping")
+    mapping.location = (-540, 0)
+    mapping.inputs["Rotation"].default_value[0] = math.radians(90.0)
+
+    gradient = nodes.new(type="ShaderNodeTexGradient")
+    gradient.location = (-350, 0)
+    gradient.gradient_type = "LINEAR"
+
+    smooth = nodes.new(type="ShaderNodeMapRange")
+    smooth.location = (-170, 0)
+    smooth.inputs["From Min"].default_value = 0.2
+    smooth.inputs["From Max"].default_value = 0.88
+    smooth.inputs["To Min"].default_value = 0.0
+    smooth.inputs["To Max"].default_value = 1.0
+    smooth.clamp = True
+
+    ramp = nodes.new(type="ShaderNodeValToRGB")
+    ramp.location = (-10, 0)
+    ramp.color_ramp.elements[0].position = 0.0
+    ramp.color_ramp.elements[0].color = bg_bottom
+    ramp.color_ramp.elements[1].position = 1.0
+    ramp.color_ramp.elements[1].color = bg_top
+
+    background.inputs[1].default_value = 0.55 if bg_cfg["style"] == "auto_contrast_studio" else 0.48
+
+    links.new(tex_coord.outputs["Generated"], mapping.inputs["Vector"])
+    links.new(mapping.outputs["Vector"], gradient.inputs["Vector"])
+    links.new(gradient.outputs["Fac"], smooth.inputs["Value"])
+    links.new(smooth.outputs["Result"], ramp.inputs["Fac"])
+    links.new(ramp.outputs["Color"], background.inputs["Color"])
+    links.new(background.outputs["Background"], output.inputs["Surface"])
+
+
+def setup_lighting_and_world(bpy, dims: tuple[float, float, float], job: dict) -> None:
     width, height, depth = dims
 
-    world = bpy.data.worlds.get("World")
-    if world:
-        world.use_nodes = True
-        bg = world.node_tree.nodes.get("Background")
-        if bg:
-            bg.inputs[0].default_value = (0.92, 0.92, 0.92, 1.0)
-            bg.inputs[1].default_value = 0.7
+    bg_cfg = parse_scene_background(job)
+    presets = parse_presets(job)
+
+    setup_background_world(bpy, bg_cfg)
+
+    floor_mix = clamp(bg_cfg["floor_tint_intensity"], 0.0, 1.0)
+    floor_tint = hex_to_rgba(bg_cfg["floor_tint"])
+    floor_base = lerp_color((0.92, 0.92, 0.92, 1.0), floor_tint, floor_mix)
 
     # Ground plane for contact realism
-    bpy.ops.mesh.primitive_plane_add(size=5.0, location=(0.0, 0.0, 0.0))
+    bpy.ops.mesh.primitive_plane_add(size=6.5, location=(0.0, 0.0, 0.0))
     ground = bpy.context.object
     ground.name = "Ground"
     gmat = bpy.data.materials.new(name="GroundMaterial")
     gmat.use_nodes = True
     gbsdf = gmat.node_tree.nodes.get("Principled BSDF")
-    gbsdf.inputs["Base Color"].default_value = (0.94, 0.94, 0.94, 1.0)
-    gbsdf.inputs["Roughness"].default_value = 0.72
+    gbsdf.inputs["Base Color"].default_value = floor_base
+    gbsdf.inputs["Roughness"].default_value = 0.78
+    gbsdf.inputs["Specular IOR Level"].default_value = 0.08
     ground.data.materials.append(gmat)
 
-    bpy.ops.object.light_add(type="AREA", location=(width * 2.3, -(depth * 2.6), height * 2.1))
+    # Back wall for clean studio two-tone read and color separation
+    bpy.ops.mesh.primitive_plane_add(size=6.5, location=(0.0, depth * 1.9, height * 1.3))
+    wall = bpy.context.object
+    wall.name = "BackdropWall"
+    wall.rotation_euler = (math.radians(90.0), 0.0, 0.0)
+
+    wmat = bpy.data.materials.new(name="BackdropWallMaterial")
+    wmat.use_nodes = True
+    wnodes = wmat.node_tree.nodes
+    wlinks = wmat.node_tree.links
+
+    wall_bsdf = wnodes.get("Principled BSDF")
+    wall_output = wnodes.get("Material Output")
+    if wall_bsdf and wall_output:
+        wall_bsdf.inputs["Roughness"].default_value = 0.93
+        wall_bsdf.inputs["Specular IOR Level"].default_value = 0.0
+        wall_bsdf.inputs["Base Color"].default_value = lerp_color(
+            hex_to_rgba(bg_cfg["bottom_color"]),
+            hex_to_rgba(bg_cfg["top_color"]),
+            0.55,
+        )
+
+        if bg_cfg["style"] in {"auto_contrast_studio", "dual_tone"}:
+            tex_coord = wnodes.new(type="ShaderNodeTexCoord")
+            tex_coord.location = (-560, 40)
+            sep = wnodes.new(type="ShaderNodeSeparateXYZ")
+            sep.location = (-360, 40)
+            ramp = wnodes.new(type="ShaderNodeValToRGB")
+            ramp.location = (-170, 40)
+            ramp.color_ramp.elements[0].position = 0.18
+            ramp.color_ramp.elements[0].color = hex_to_rgba(bg_cfg["bottom_color"])
+            ramp.color_ramp.elements[1].position = 0.9
+            ramp.color_ramp.elements[1].color = hex_to_rgba(bg_cfg["top_color"])
+
+            wlinks.new(tex_coord.outputs["Object"], sep.inputs["Vector"])
+            wlinks.new(sep.outputs["Z"], ramp.inputs["Fac"])
+            wlinks.new(ramp.outputs["Color"], wall_bsdf.inputs["Base Color"])
+
+    wall.data.materials.append(wmat)
+
+    if presets["lighting_preset"] == "balanced_catalog":
+        key_energy = 980
+        fill_energy = 520
+        rim_energy = 420
+        top_energy = 180
+    elif presets["lighting_preset"] == "high_contrast":
+        key_energy = 1380
+        fill_energy = 360
+        rim_energy = 620
+        top_energy = 140
+    else:  # premium_softbox default
+        key_energy = 1200
+        fill_energy = 560
+        rim_energy = 500
+        top_energy = 220
+
+    # Key light
+    bpy.ops.object.light_add(type="AREA", location=(width * 2.45, -(depth * 2.75), height * 2.2))
     key = bpy.context.object
-    key.data.energy = 1200
-    key.data.size = 1.2
+    key.name = "KeyLight"
+    key.data.energy = key_energy
+    key.data.size = 1.7
 
-    bpy.ops.object.light_add(type="AREA", location=(-(width * 2.4), -(depth * 1.5), height * 1.4))
+    # Fill light
+    bpy.ops.object.light_add(type="AREA", location=(-(width * 2.65), -(depth * 1.55), height * 1.55))
     fill = bpy.context.object
-    fill.data.energy = 500
-    fill.data.size = 1.8
+    fill.name = "FillLight"
+    fill.data.energy = fill_energy
+    fill.data.size = 2.2
 
-    bpy.ops.object.light_add(type="AREA", location=(0.0, depth * 2.2, height * 2.0))
+    # Rim/back light for separation on all object colors
+    bpy.ops.object.light_add(type="AREA", location=(0.0, depth * 2.6, height * 1.9))
     rim = bpy.context.object
-    rim.data.energy = 320
-    rim.data.size = 1.0
+    rim.name = "RimLight"
+    rim.data.energy = rim_energy
+    rim.data.size = 1.1
+
+    # Gentle top light to keep white boxes readable without flattening black boxes
+    bpy.ops.object.light_add(type="AREA", location=(0.0, -(depth * 0.4), height * 3.1))
+    top = bpy.context.object
+    top.name = "TopLight"
+    top.data.energy = top_energy
+    top.data.size = 2.8
 
 
 def add_camera(bpy, name: str, location: tuple[float, float, float], rotation: tuple[float, float, float], lens: float):
@@ -551,32 +766,84 @@ def add_camera(bpy, name: str, location: tuple[float, float, float], rotation: t
     return cam
 
 
-def setup_cameras(bpy, dims: tuple[float, float, float]):
+def setup_cameras(bpy, dims: tuple[float, float, float], job: dict):
     width, height, depth = dims
-    cams = {
+    preset = parse_presets(job)["camera_preset"]
+
+    if preset == "phase2_three_view":
+        return {
+            "front": add_camera(
+                bpy,
+                "CamFront",
+                (0.0, -(depth * 3.0 + 0.28), height * 0.60),
+                (1.535, 0.0, 0.0),
+                70.0,
+            ),
+            "angle": add_camera(
+                bpy,
+                "CamAngle",
+                (width * 2.15 + 0.24, -(depth * 2.35 + 0.20), height * 0.80),
+                (1.16, 0.0, 0.94),
+                58.0,
+            ),
+            "closeup": add_camera(
+                bpy,
+                "CamCloseup",
+                (0.0, -(depth * 1.35 + 0.08), height * 0.58),
+                (1.54, 0.0, 0.0),
+                85.0,
+            ),
+        }
+
+    if preset == "product_studio_balanced":
+        return {
+            "front": add_camera(
+                bpy,
+                "CamFront",
+                (0.0, -(depth * 2.95 + 0.30), height * 0.62),
+                (1.525, 0.0, 0.0),
+                74.0,
+            ),
+            "angle": add_camera(
+                bpy,
+                "CamAngle",
+                (width * 2.35 + 0.26, -(depth * 2.15 + 0.24), height * 0.82),
+                (1.13, 0.0, 0.92),
+                62.0,
+            ),
+            "closeup": add_camera(
+                bpy,
+                "CamCloseup",
+                (0.0, -(depth * 1.25 + 0.09), height * 0.62),
+                (1.535, 0.0, 0.0),
+                90.0,
+            ),
+        }
+
+    # phase3_three_view_realistic default
+    return {
         "front": add_camera(
             bpy,
             "CamFront",
-            (0.0, -(depth * 3.0 + 0.28), height * 0.60),
-            (1.535, 0.0, 0.0),
-            70.0,
+            (0.0, -(depth * 3.1 + 0.30), height * 0.62),
+            (1.525, 0.0, 0.0),
+            72.0,
         ),
         "angle": add_camera(
             bpy,
             "CamAngle",
-            (width * 2.15 + 0.24, -(depth * 2.35 + 0.20), height * 0.80),
-            (1.16, 0.0, 0.94),
-            58.0,
+            (width * 2.42 + 0.28, -(depth * 2.05 + 0.25), height * 0.84),
+            (1.11, 0.0, 0.905),
+            60.0,
         ),
         "closeup": add_camera(
             bpy,
             "CamCloseup",
-            (0.0, -(depth * 1.35 + 0.08), height * 0.58),
-            (1.54, 0.0, 0.0),
-            85.0,
+            (0.0, -(depth * 1.20 + 0.10), height * 0.64),
+            (1.53, 0.0, 0.0),
+            92.0,
         ),
     }
-    return cams
 
 
 def configure_render_settings(bpy, job: dict):
@@ -602,7 +869,6 @@ def configure_render_settings(bpy, job: dict):
         eevee.use_bloom = False
 
 
-
 def render_with_blender(job: dict, job_path: Path) -> dict[str, Path]:
     try:
         import bpy  # type: ignore
@@ -620,8 +886,8 @@ def render_with_blender(job: dict, job_path: Path) -> dict[str, Path]:
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
     _, dims = create_box_with_label_decal(bpy, job, label_path)
-    setup_lighting_and_world(bpy, dims)
-    cams = setup_cameras(bpy, dims)
+    setup_lighting_and_world(bpy, dims, job)
+    cams = setup_cameras(bpy, dims, job)
     configure_render_settings(bpy, job)
 
     scene = bpy.context.scene

@@ -1,8 +1,15 @@
 {
   "job_id": "box-mockup-phase3-001",
   "scene": {
-    "background": "studio_gray",
-    "camera_preset": "phase3_three_view_realistic"
+    "background": {
+      "style": "auto_contrast_studio",
+      "top_color": "#f2f4f7",
+      "bottom_color": "#c8cfd8",
+      "floor_tint": "#d4dbe4",
+      "floor_tint_intensity": 0.42
+    },
+    "camera_preset": "phase3_three_view_realistic",
+    "lighting_preset": "premium_softbox"
   },
   "box": {
     "dimensions_mm": {

@@ -117,6 +117,39 @@ def validate_job(job: dict) -> list[str]:
                     if k in print_area and not _in_range(print_area.get(k), 0.0, 1.0):
                         errors.append(f"label.print_area.{k} must be a number in [0, 1]")
 
+    # Phase 3.1 scene controls
+    scene = job.get("scene", {}) if isinstance(job.get("scene"), dict) else {}
+    bg = scene.get("background")
+    if isinstance(bg, dict):
+        style = bg.get("style", "auto_contrast_studio")
+        if style not in ("auto_contrast_studio", "dual_tone", "flat"):
+            errors.append("scene.background.style must be one of: auto_contrast_studio|dual_tone|flat")
+
+        for k in ("top_color", "bottom_color", "floor_tint"):
+            if k in bg and not isinstance(bg.get(k), str):
+                errors.append(f"scene.background.{k} must be a hex color string")
+
+        if "floor_tint_intensity" in bg and not _in_range(bg.get("floor_tint_intensity"), 0.0, 1.0):
+            errors.append("scene.background.floor_tint_intensity must be a number in [0, 1]")
+
+    camera_preset = scene.get("camera_preset")
+    if camera_preset is not None and camera_preset not in (
+        "phase2_three_view",
+        "phase3_three_view_realistic",
+        "product_studio_balanced",
+    ):
+        errors.append(
+            "scene.camera_preset must be one of: phase2_three_view|phase3_three_view_realistic|product_studio_balanced"
+        )
+
+    lighting_preset = scene.get("lighting_preset")
+    if lighting_preset is not None and lighting_preset not in (
+        "premium_softbox",
+        "balanced_catalog",
+        "high_contrast",
+    ):
+        errors.append("scene.lighting_preset must be one of: premium_softbox|balanced_catalog|high_contrast")
+
     output = job.get("output", {})
     views = output.get("views")
     if views is not None:
