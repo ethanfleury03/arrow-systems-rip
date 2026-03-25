@@ -15,6 +15,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  adapter-tests:
+    name: Adapter API tests (Python)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install adapter deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r adapter/requirements.txt
+
+      - name: Run adapter tests
+        run: |
+          pytest adapter/tests -q
+
   windows-build:
     name: Windows CMake build (Release)
     runs-on: windows-latest
