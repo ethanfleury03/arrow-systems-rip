@@ -27,7 +27,18 @@ target_include_directories(memjet-rip PRIVATE
 
 if(WIN32)
   target_compile_definitions(memjet-rip PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
-  target_link_libraries(memjet-rip PRIVATE ws2_32)
+
+  find_library(JSL_IMPORT_LIB
+    NAMES JobSubmissionLib libJobSubmissionLib
+    PATHS ${JSL_SDK_DIR}
+    NO_DEFAULT_PATH
+  )
+
+  if(NOT JSL_IMPORT_LIB)
+    message(FATAL_ERROR "Could not find JobSubmissionLib import library in ${JSL_SDK_DIR}")
+  endif()
+
+  target_link_libraries(memjet-rip PRIVATE ws2_32 ${JSL_IMPORT_LIB})
 endif()
 
 # Keep runtime DLLs co-located with the executable when available.
