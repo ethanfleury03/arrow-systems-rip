@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <ctime>
 #include <cctype>
+#include <sys/stat.h>
 
 #ifdef _WIN32
 #define popen _popen
@@ -116,6 +117,33 @@ namespace {
         return parsed > 0 ? parsed : fallback;
     }
 
+    bool fileExistsPath(const std::string& path) {
+        if (path.empty()) return false;
+        struct stat st;
+        return stat(path.c_str(), &st) == 0;
+    }
+
+    std::string joinPath(const std::string& base, const std::string& rel) {
+        if (base.empty()) return rel;
+#ifdef _WIN32
+        const char sep = '\\';
+#else
+        const char sep = '/';
+#endif
+        if (base.back() == '/' || base.back() == '\\') return base + rel;
+        return base + sep + rel;
+    }
+
+    std::string buildControllerResolutionError(const std::vector<std::string>& attempted) {
+        std::ostringstream oss;
+        oss << "RIP_THRIFT_CONTROLLER_PY unresolved; thrift controller script not found. Attempted:";
+        for (const auto& p : attempted) {
+            oss << " [" << p << "]";
+        }
+        oss << " -- set RIP_THRIFT_CONTROLLER_PY to an existing thrift_controller_fullcycle.py path";
+        return oss.str();
+    }
+
     const char* phaseToString(SessionPhase phase) {
         switch (phase) {
             case SessionPhase::IDLE: return "IDLE";
@@ -178,7 +206,74 @@ PesOrchestrator::PesOrchestrator(const std::string& thriftControllerPath,
 PesOrchestrator::~PesOrchestrator() {}
 
 std::string PesOrchestrator::runThriftCmd(const std::string& command) {
-    if (thriftControllerPath_.empty()) return "";
+    std::string resolvedControllerPath;
+    std::vector<std::string> attempted;
+
+    if (const char* v = std::getenv("RIP_THRIFT_CONTROLLER_PY")) {
+        if (std::strlen(v) > 0) {
+            resolvedControllerPath = v;
+            attempted.push_back(resolvedControllerPath + " (env RIP_THRIFT_CONTROLLER_PY)");
+        }
+    }
+    if (resolvedControllerPath.empty() && !thriftControllerPath_.empty()) {
+        resolvedControllerPath = thriftControllerPath_;
+        attempted.push_back(resolvedControllerPath + " (configured)");
+    }
+
+#ifdef _WIN32
+    const std::vector<std::string> relativeCandidates = {
+        "src\\thrift_controller_fullcycle.py",
+        "..\\src\\thrift_controller_fullcycle.py",
+        "..\\..\\src\\thrift_controller_fullcycle.py"
+    };
+#else
+    const std::vector<std::string> relativeCandidates = {
+        "src/thrift_controller_fullcycle.py",
+        "../src/thrift_controller_fullcycle.py",
+        "../../src/thrift_controller_fullcycle.py"
+    };
+#endif
+
+    if (!resolvedControllerPath.empty() && fileExistsPath(resolvedControllerPath)) {
+        // keep resolved path
+    } else {
+        if (!resolvedControllerPath.empty() && !fileExistsPath(resolvedControllerPath)) {
+            attempted.push_back(resolvedControllerPath + " (missing)");
+        }
+        resolvedControllerPath.clear();
+
+        for (const auto& rel : relativeCandidates) {
+            attempted.push_back(rel + " (cwd-relative)");
+            if (fileExistsPath(rel)) {
+                resolvedControllerPath = rel;
+                break;
+            }
+        }
+
+        if (resolvedControllerPath.empty()) {
+            std::string cwd;
+            if (const char* c = std::getenv("CD")) {
+                cwd = c;
+            } else if (const char* p = std::getenv("PWD")) {
+                cwd = p;
+            }
+            if (!cwd.empty()) {
+                for (const auto& rel : relativeCandidates) {
+                    const std::string full = joinPath(cwd, rel);
+                    attempted.push_back(full + " (from cwd env)");
+                    if (fileExistsPath(full)) {
+                        resolvedControllerPath = full;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (resolvedControllerPath.empty()) {
+        logError(buildControllerResolutionError(attempted));
+        return "ERROR: THRIFT_CONTROLLER_NOT_FOUND";
+    }
 
     std::string pythonExe = "C:\\Python27\\python.exe";
     if (const char* v = std::getenv("THRIFT_PYTHON_EXE")) {
@@ -196,12 +291,12 @@ std::string PesOrchestrator::runThriftCmd(const std::string& command) {
 #ifdef _WIN32
     cmd << "cmd /C \"set \"\"PDL_THRIFT_ROOT=" << pdlThriftRoot << "\"\" && "
         << "\"" << pythonExe << "\" "
-        << "\"" << thriftControllerPath_ << "\" "
+        << "\"" << resolvedControllerPath << "\" "
         << pesIp_ << " " << controlPort_ << " " << command << " 2^>^&1\"";
 #else
     cmd << "PDL_THRIFT_ROOT=\"" << pdlThriftRoot << "\" "
         << "\"" << pythonExe << "\" "
-        << "\"" << thriftControllerPath_ << "\" "
+        << "\"" << resolvedControllerPath << "\" "
         << pesIp_ << " " << controlPort_ << " " << command << " 2>&1";
 #endif
 

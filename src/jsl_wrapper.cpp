@@ -6,6 +6,7 @@
 #include <thread>
 #include <chrono>
 #include <cstdlib>
+#include <vector>
 
 namespace memjet {
 
@@ -85,12 +86,32 @@ bool JSLWrapper::initialize() {
         return true;
     }
 
-    // Config path: JSL_CONFIG_PATH env, fallback to relative path
+    // Config path: JSL_CONFIG_PATH env, else probe common repo/build locations.
     const char* envPath = std::getenv("JSL_CONFIG_PATH");
     if (envPath && envPath[0] != '\0') {
         configPath_ = envPath;
     } else {
-        configPath_ = "C:/Users/Arrow/Arrow-Rip/build/jsl-sdk/JslConfigs.xml";
+        const std::vector<std::string> candidates = {
+            "C:/Users/Arrow/Arrow-Rip/jsl-sdk/JslConfigs.xml",
+            "C:/Users/Arrow/Arrow-Rip/src/jsl-sdk/JslConfigs.xml",
+            "C:/Users/Arrow/Arrow-Rip/src/build/jsl-sdk/JslConfigs.xml",
+            "C:/Users/Arrow/Arrow-Rip/build/jsl-sdk/JslConfigs.xml",
+            "jsl-sdk/JslConfigs.xml",
+            "../jsl-sdk/JslConfigs.xml",
+            "../../jsl-sdk/JslConfigs.xml"
+        };
+
+        for (const auto& p : candidates) {
+            std::ifstream probe(p);
+            if (probe.good()) {
+                configPath_ = p;
+                break;
+            }
+        }
+
+        if (configPath_.empty()) {
+            configPath_ = "C:/Users/Arrow/Arrow-Rip/jsl-sdk/JslConfigs.xml";
+        }
     }
 
     // Print mode: JSL_PRINT_MODE env, default 1

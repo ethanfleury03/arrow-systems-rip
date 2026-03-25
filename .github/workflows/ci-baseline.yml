@@ -1,0 +1,76 @@
+name: CI Baseline
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+      - chore/**
+      - feat/**
+      - fix/**
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  adapter-tests:
+    name: Adapter API tests (Python)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install adapter deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r adapter/requirements.txt
+
+      - name: Run adapter tests
+        run: |
+          pytest adapter/tests -q
+
+  windows-build:
+    name: Windows CMake build (Release)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S src -B src/build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build src/build --config Release --parallel
+
+      - name: Run unit tests (ctest)
+        shell: pwsh
+        run: |
+          ctest --test-dir src/build -C Release --output-on-failure
+
+      - name: Verify artifact exists
+        shell: pwsh
+        run: |
+          $exe = "src/build/Release/memjet-rip.exe"
+          if (!(Test-Path $exe)) {
+            Write-Error "Build did not produce $exe"
+          }
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: memjet-rip-windows-release
+          path: src/build/Release/memjet-rip.exe
+          if-no-files-found: error

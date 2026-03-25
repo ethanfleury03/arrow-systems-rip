@@ -41,6 +41,14 @@ std::string generateJobId() {
 
 CommandLineArgs parseCommandLine(int argc, char* argv[]) {
     CommandLineArgs args;
+    bool pesIpExplicit = false;
+    bool pesPortExplicit = false;
+
+    auto envOrEmpty = [](const char* key) -> std::string {
+        const char* v = std::getenv(key);
+        if (!v) return "";
+        return std::string(v);
+    };
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -52,8 +60,10 @@ CommandLineArgs parseCommandLine(int argc, char* argv[]) {
             args.inputPdf = argv[++i];
         } else if ((arg == "--pes-ip") && i + 1 < argc) {
             args.pesIp = argv[++i];
+            pesIpExplicit = true;
         } else if ((arg == "--pes-port") && i + 1 < argc) {
             args.pesPort = static_cast<uint16_t>(std::stoi(argv[++i]));
+            pesPortExplicit = true;
         } else if ((arg == "-r" || arg == "--dpi") && i + 1 < argc) {
             args.dpi = std::stoi(argv[++i]);
         } else if ((arg == "-p" || arg == "--page") && i + 1 < argc) {
@@ -82,6 +92,31 @@ CommandLineArgs parseCommandLine(int argc, char* argv[]) {
         }
     }
 
+    if (!pesIpExplicit) {
+        for (const char* key : {"RIP_DEFAULT_PES_IP", "RIP_PES_IP", "PES_IP"}) {
+            std::string value = envOrEmpty(key);
+            if (!value.empty()) {
+                args.pesIp = value;
+                break;
+            }
+        }
+    }
+
+    if (!pesPortExplicit) {
+        for (const char* key : {"RIP_DEFAULT_PES_PORT", "RIP_PES_PORT", "PES_PORT"}) {
+            std::string value = envOrEmpty(key);
+            if (value.empty()) continue;
+            try {
+                const int parsed = std::stoi(value);
+                if (parsed > 0 && parsed <= 65535) {
+                    args.pesPort = static_cast<uint16_t>(parsed);
+                    break;
+                }
+            } catch (...) {
+            }
+        }
+    }
+
     return args;
 }
 
@@ -90,8 +125,8 @@ void printUsage(const std::string& programName) {
               << "Usage: " << programName << " [options] <input.pdf>\n\n"
               << "Options:\n"
               << "  -i, --input <file>     Input PDF file\n"
-              << "  --pes-ip <ip>          PES printer IP address\n"
-              << "  --pes-port <port>      PES port (default: 9090)\n"
+              << "  --pes-ip <ip>          PES printer IP address (default: 192.168.100.200; env RIP_DEFAULT_PES_IP overrides)\n"
+              << "  --pes-port <port>      PES port (default: 13001; env RIP_DEFAULT_PES_PORT overrides)\n"
               << "  -r, --dpi <dpi>        Resolution (default: 1600)\n"
               << "  -p, --page <num>       Page number to print (default: all)\n"
               << "  --paper <size>         Paper size: a4, letter (default: a4)\n"
