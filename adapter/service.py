@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 
 MAX_LOG_TAIL = 200
 DEFAULT_RIP_COMMAND = ["./src/build/memjet-rip"]
-DEFAULT_PES_IP = "192.168.111.2"
+DEFAULT_PES_IP = "192.168.100.200"
 DEFAULT_PES_PORT = "13001"
 
 

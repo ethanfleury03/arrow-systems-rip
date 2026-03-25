@@ -25,7 +25,7 @@ If not set, adapter uses `./src/build/memjet-rip`.
 ## Default PES routing (zero-touch)
 
 The adapter now has built-in defaults:
-- PES IP: `192.168.111.2`
+- PES IP: `192.168.100.200`
 - PES port: `13001`
 
 So `POST /jobs` can use only:

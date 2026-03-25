@@ -17,7 +17,7 @@ if "%~1"=="" (
   exit /b 1
 )
 
-"%EXE%" -i "%~1" --pes-ip 192.168.111.1 --pes-port 13001 --dpi 1600 --paper letter --page 1 -v %2 %3 %4 %5 %6 %7 %8 %9
+"%EXE%" -i "%~1" --pes-ip 192.168.100.200 --pes-port 13001 --dpi 1600 --paper letter --page 1 -v %2 %3 %4 %5 %6 %7 %8 %9
 set "RC=%ERRORLEVEL%"
 echo [INFO] EXITCODE=%RC%
 exit /b %RC%

@@ -14,7 +14,7 @@ std::string generateJobId();
 // Parse command line arguments
 struct CommandLineArgs {
     std::string inputPdf;
-    std::string pesIp = "192.168.111.2";
+    std::string pesIp = "192.168.100.200";
     uint16_t pesPort = 13001;
     int dpi = 1600;
     bool dryRun = false;

@@ -125,7 +125,7 @@ void printUsage(const std::string& programName) {
               << "Usage: " << programName << " [options] <input.pdf>\n\n"
               << "Options:\n"
               << "  -i, --input <file>     Input PDF file\n"
-              << "  --pes-ip <ip>          PES printer IP address (default: 192.168.111.2; env RIP_DEFAULT_PES_IP overrides)\n"
+              << "  --pes-ip <ip>          PES printer IP address (default: 192.168.100.200; env RIP_DEFAULT_PES_IP overrides)\n"
               << "  --pes-port <port>      PES port (default: 13001; env RIP_DEFAULT_PES_PORT overrides)\n"
               << "  -r, --dpi <dpi>        Resolution (default: 1600)\n"
               << "  -p, --page <num>       Page number to print (default: all)\n"
