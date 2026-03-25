@@ -27,10 +27,10 @@ struct RuntimeConfig {
     uint32_t stripStart = 0;
     uint32_t stripWidth = 0;
 
-    std::string thriftControllerPath = "C:\\Users\\Arrow\\Arrow-Rip\\src\\thrift_controller_fullcycle.py";
+    std::string thriftControllerPath = "src\\thrift_controller_fullcycle.py";
     int thriftControlPort = 13001;
     std::string pythonExe = "C:\\Python27\\python.exe";
-    std::string pdlThriftRoot = "C:\\Users\\Arrow\\Arrow-Rip\\vendor\\pdl_py";
+    std::string pdlThriftRoot = "vendor\\pdl_py";
 
     bool useLegacyOrchestration = false;
     int postStartHoldMs = 8000;

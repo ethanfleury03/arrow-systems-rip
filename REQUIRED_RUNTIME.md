@@ -11,6 +11,9 @@ This repo is structured so `git pull` + two commands should be enough:
 - Visual C++ runtime (usually already in `C:\Windows\System32`)
 - JSL runtime DLLs present in:
   - `vendor\runtime\jsl\*.dll`
+- Thrift controller script resolvable at runtime:
+  - default auto-discovery from current repo (`src\thrift_controller_fullcycle.py`)
+  - optional override: `RIP_THRIFT_CONTROLLER_PY=C:\full\path\to\thrift_controller_fullcycle.py`
 
 ## Why this exists
 

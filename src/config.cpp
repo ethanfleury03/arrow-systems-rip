@@ -125,8 +125,10 @@ bool loadRuntimeConfig(const memjet::utils::CommandLineArgs& args,
     if (!parseInt("JSL_STRIP_WIDTH", 0, 0, 1000000, stripWidth, error)) return false;
     out.stripWidth = static_cast<uint32_t>(stripWidth);
 
-    if (const char* v = std::getenv("THRIFT_CONTROLLER_PATH")) {
+    if (const char* v = std::getenv("RIP_THRIFT_CONTROLLER_PY")) {
         if (*v) out.thriftControllerPath = v;
+    } else if (const char* v2 = std::getenv("THRIFT_CONTROLLER_PATH")) {
+        if (*v2) out.thriftControllerPath = v2;
     }
     if (!parseInt("THRIFT_CONTROL_PORT", 13001, 1, 65535, out.thriftControlPort, error)) return false;
     if (const char* v = std::getenv("THRIFT_PYTHON_EXE")) {
