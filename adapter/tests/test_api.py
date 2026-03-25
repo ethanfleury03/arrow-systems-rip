@@ -76,7 +76,7 @@ def test_injects_hard_defaults_without_env(monkeypatch, tmp_path):
     command = service.start_job('job-1', service.JobRequest(input_path=str(input_file)))
 
     assert '--pes-ip' in command
-    assert '192.168.111.2' in command
+    assert '192.168.100.200' in command
     assert '--pes-port' in command
     assert '13001' in command
 
@@ -85,7 +85,7 @@ def test_explicit_args_override_defaults(monkeypatch, tmp_path):
     input_file = tmp_path / 'job.pdf'
     input_file.write_text('x')
 
-    monkeypatch.setenv('RIP_DEFAULT_PES_IP', '192.168.111.2')
+    monkeypatch.setenv('RIP_DEFAULT_PES_IP', '192.168.100.200')
     monkeypatch.setenv('RIP_DEFAULT_PES_PORT', '13001')
 
     captured = {}

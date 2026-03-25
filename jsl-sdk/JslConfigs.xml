@@ -53,7 +53,7 @@
   <printheadModules>
     <engineStage number="1">
       <strip number="1">
-        <!-- Match your runtime job color order: M K C Y -->
+        <!-- Match your runtime job color order: M C K Y -->
         <printheadModule color="JSLIB_MAGENTA JSLIB_CYAN JSLIB_BLACK JSLIB_YELLOW">
           <socket type="primary">
             <hostAddress>192.168.111.1</hostAddress>
