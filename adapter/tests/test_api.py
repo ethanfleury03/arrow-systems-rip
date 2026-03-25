@@ -47,17 +47,19 @@ def test_submit_invalid_path():
     assert r.status_code == 422
 
 
-def test_injects_default_pes_args(monkeypatch, tmp_path):
+def test_injects_hard_defaults_without_env(monkeypatch, tmp_path):
     input_file = tmp_path / 'job.pdf'
     input_file.write_text('x')
 
-    monkeypatch.setenv('RIP_DEFAULT_PES_IP', '192.168.111.2')
-    monkeypatch.setenv('RIP_DEFAULT_PES_PORT', '13001')
-
-    captured = {}
+    monkeypatch.delenv('RIP_DEFAULT_PES_IP', raising=False)
+    monkeypatch.delenv('RIP_PES_IP', raising=False)
+    monkeypatch.delenv('PES_IP', raising=False)
+    monkeypatch.delenv('RIP_DEFAULT_PES_PORT', raising=False)
+    monkeypatch.delenv('RIP_PES_PORT', raising=False)
+    monkeypatch.delenv('PES_PORT', raising=False)
 
     def fake_run_job(job_id, command, env_overrides):
-        captured['command'] = command
+        pass
 
     class FakeThread:
         def __init__(self, target=None, args=(), daemon=None):

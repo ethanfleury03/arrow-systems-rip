@@ -22,16 +22,13 @@ export RIP_COMMAND="./src/build/memjet-rip"
 
 If not set, adapter uses `./src/build/memjet-rip`.
 
-## Default PES routing (recommended)
+## Default PES routing (zero-touch)
 
-Set stable defaults once and keep submit payloads simple:
+The adapter now has built-in defaults:
+- PES IP: `192.168.111.2`
+- PES port: `13001`
 
-```bash
-export RIP_DEFAULT_PES_IP="192.168.111.2"
-export RIP_DEFAULT_PES_PORT="13001"
-```
-
-`POST /jobs` can then use only:
+So `POST /jobs` can use only:
 
 ```json
 {"input_path":"C:\\Users\\Arrow\\Downloads\\file.pdf"}
@@ -39,4 +36,5 @@ export RIP_DEFAULT_PES_PORT="13001"
 
 Override behavior remains supported:
 - payload `args` with `--pes-ip/--pes-port` wins over defaults
+- env (`RIP_DEFAULT_PES_IP` / `RIP_DEFAULT_PES_PORT`, etc.) overrides hard defaults
 - `--dry-run` does not inject PES defaults
