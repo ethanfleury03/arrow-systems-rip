@@ -42,6 +42,12 @@ std::string generateJobId() {
 CommandLineArgs parseCommandLine(int argc, char* argv[]) {
     CommandLineArgs args;
 
+    auto envOrEmpty = [](const char* key) -> std::string {
+        const char* v = std::getenv(key);
+        if (!v) return "";
+        return std::string(v);
+    };
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
 
@@ -82,6 +88,31 @@ CommandLineArgs parseCommandLine(int argc, char* argv[]) {
         }
     }
 
+    if (args.pesIp.empty()) {
+        for (const char* key : {"RIP_DEFAULT_PES_IP", "RIP_PES_IP", "PES_IP"}) {
+            std::string value = envOrEmpty(key);
+            if (!value.empty()) {
+                args.pesIp = value;
+                break;
+            }
+        }
+    }
+
+    if (args.pesPort == 9090) {
+        for (const char* key : {"RIP_DEFAULT_PES_PORT", "RIP_PES_PORT", "PES_PORT"}) {
+            std::string value = envOrEmpty(key);
+            if (value.empty()) continue;
+            try {
+                const int parsed = std::stoi(value);
+                if (parsed > 0 && parsed <= 65535) {
+                    args.pesPort = static_cast<uint16_t>(parsed);
+                    break;
+                }
+            } catch (...) {
+            }
+        }
+    }
+
     return args;
 }
 
@@ -90,8 +121,8 @@ void printUsage(const std::string& programName) {
               << "Usage: " << programName << " [options] <input.pdf>\n\n"
               << "Options:\n"
               << "  -i, --input <file>     Input PDF file\n"
-              << "  --pes-ip <ip>          PES printer IP address\n"
-              << "  --pes-port <port>      PES port (default: 9090)\n"
+              << "  --pes-ip <ip>          PES printer IP address (or env RIP_DEFAULT_PES_IP)\n"
+              << "  --pes-port <port>      PES port (default: 9090, or env RIP_DEFAULT_PES_PORT)\n"
               << "  -r, --dpi <dpi>        Resolution (default: 1600)\n"
               << "  -p, --page <num>       Page number to print (default: all)\n"
               << "  --paper <size>         Paper size: a4, letter (default: a4)\n"

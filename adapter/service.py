@@ -64,6 +64,26 @@ def _append_log(job: Dict[str, Any], line: str) -> None:
     logs.append(line.rstrip("\n"))
 
 
+def _has_arg(args: List[str], flag: str) -> bool:
+    return any(a == flag or a.startswith(f"{flag}=") for a in args)
+
+
+def _resolve_default_pes_ip() -> Optional[str]:
+    for key in ("RIP_DEFAULT_PES_IP", "RIP_PES_IP", "PES_IP"):
+        value = os.getenv(key, "").strip()
+        if value:
+            return value
+    return None
+
+
+def _resolve_default_pes_port() -> Optional[str]:
+    for key in ("RIP_DEFAULT_PES_PORT", "RIP_PES_PORT", "PES_PORT"):
+        value = os.getenv(key, "").strip()
+        if value:
+            return value
+    return None
+
+
 def _transition(job: Dict[str, Any], status: str, event: Optional[Dict[str, Any]] = None) -> None:
     job["status"] = status
     job["updated_at"] = _utc_now()
@@ -139,7 +159,19 @@ def _run_job(job_id: str, command: List[str], env_overrides: Dict[str, str]) -> 
 
 
 def start_job(job_id: str, payload: JobRequest) -> List[str]:
-    command = _default_command() + [payload.input_path] + payload.args
+    args = list(payload.args)
+
+    if not _has_arg(args, "--dry-run"):
+        if not _has_arg(args, "--pes-ip"):
+            default_ip = _resolve_default_pes_ip()
+            if default_ip:
+                args.extend(["--pes-ip", default_ip])
+        if not _has_arg(args, "--pes-port"):
+            default_port = _resolve_default_pes_port()
+            if default_port:
+                args.extend(["--pes-port", default_port])
+
+    command = _default_command() + [payload.input_path] + args
     thread = threading.Thread(target=_run_job, args=(job_id, command, payload.env), daemon=True)
     thread.start()
     return command
