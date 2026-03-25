@@ -19,6 +19,9 @@
 #include "bilevel_converter.h"
 #include "utils.h"
 #include "pes_orchestrator.h"
+#include "config.h"
+#include "logger.h"
+#include "error_codes.h"
 
 using namespace memjet;
 using namespace memjet::utils;
@@ -36,24 +39,37 @@ static const char* colorName(ColorPlane c) {
 int main(int argc, char* argv[]) {
     CommandLineArgs args = parseCommandLine(argc, argv);
 
+    auto fail = [&](ErrorCode code, const std::string& message) -> int {
+        Logger::error(message, code);
+        Logger::event("rip.failed", {{"error_code", toErrorCodeString(code)}});
+        return toExitCode(code);
+    };
+
     if (args.inputPdf.empty()) {
-        logError("No input PDF specified");
         printUsage(argv[0]);
-        return 1;
+        return fail(ErrorCode::InvalidArgs, "No input PDF specified");
     }
 
     if (!fileExists(args.inputPdf)) {
-        logError("Input file not found: " + args.inputPdf);
-        return 1;
+        return fail(ErrorCode::InputFileMissing, "Input file not found: " + args.inputPdf);
     }
 
     if (!args.dryRun && args.pesIp.empty()) {
-        logError("PES IP address required (use --pes-ip or --dry-run)");
         printUsage(argv[0]);
-        return 1;
+        return fail(ErrorCode::InvalidArgs, "PES IP address required (use --pes-ip or --dry-run)");
     }
 
-    logInfo("Memjet RIP Proof of Concept");
+    RuntimeConfig runtimeCfg;
+    std::string cfgErr;
+    std::vector<std::string> cfgWarnings;
+    if (!loadRuntimeConfig(args, runtimeCfg, cfgErr, cfgWarnings)) {
+        return fail(ErrorCode::ConfigInvalid, "Invalid runtime config: " + cfgErr);
+    }
+    for (const auto& w : cfgWarnings) {
+        Logger::warn(w);
+    }
+
+    Logger::info("Memjet RIP Proof of Concept");
     logInfo("Input: " + args.inputPdf);
     logInfo("Resolution: " + std::to_string(args.dpi) + " DPI");
 
@@ -70,51 +86,20 @@ int main(int argc, char* argv[]) {
         // Step 1: Rasterize PDF
         PDFRasterizer rasterizer;
         if (!rasterizer.initialize()) {
-            logError("Failed to initialize rasterizer: " + rasterizer.getLastError());
-            return 1;
+            return fail(ErrorCode::RasterizerInitFailed, "Failed to initialize rasterizer: " + rasterizer.getLastError());
         }
 
-        auto parseEnvBool = [](const char* name, bool fallback, bool* wasSet = nullptr) {
-            if (const char* v = std::getenv(name)) {
-                if (wasSet) *wasSet = true;
-                std::string s = v;
-                std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-                return !(s.empty() || s == "0" || s == "false" || s == "no" || s == "off");
-            }
-            if (wasSet) *wasSet = false;
-            return fallback;
-        };
-
-        const bool forceFastMono = parseEnvBool("USE_FAST_MONO", false, nullptr);
-
-        bool envTrueCmykSet = false;
-        bool useTrueCmyk = parseEnvBool("USE_TRUE_CMYK", args.cmyk, &envTrueCmykSet);
-
-        std::string modeReason;
-        if (forceFastMono) {
-            useTrueCmyk = false;
-            modeReason = "mono forced by USE_FAST_MONO";
-        } else if (envTrueCmykSet) {
-            modeReason = std::string("USE_TRUE_CMYK=") + (useTrueCmyk ? "1" : "0");
-        } else {
-            modeReason = args.cmyk
-                ? "CLI default/--cmyk (color default)"
-                : "CLI --gray/--mono override";
-        }
+        const bool forceFastMono = runtimeCfg.forceFastMono;
+        const bool useTrueCmyk = runtimeCfg.useTrueCmyk;
+        const double globalInkLimit = runtimeCfg.globalInkLimit;
+        const double cScale = runtimeCfg.cScale;
+        const double mScale = runtimeCfg.mScale;
+        const double yScale = runtimeCfg.yScale;
+        const double kScale = runtimeCfg.kScale;
+        const int thresholdBias = runtimeCfg.thresholdBias;
 
         logInfo("Render mode selected: " + std::string(useTrueCmyk ? "CMYK_COLOR" : "MONO") +
-                " [reason=" + modeReason + "]");
-
-        auto readEnvDouble = [](const char* name, double defVal) {
-            if (const char* v = std::getenv(name)) {
-                try {
-                    return std::stod(std::string(v));
-                } catch (...) {
-                    return defVal;
-                }
-            }
-            return defVal;
-        };
+                " [reason=" + runtimeCfg.modeReason + "]");
 
         auto clampDouble = [](double v, double lo, double hi) {
             return (v < lo) ? lo : ((v > hi) ? hi : v);
@@ -123,60 +108,9 @@ int main(int argc, char* argv[]) {
             return (v < lo) ? lo : ((v > hi) ? hi : v);
         };
 
-        // Baseline linearization profile (internal engine behavior) + user calibration layer.
-        // Keep user layer neutral (all 1.0 / bias 0) to emulate Anyflow "Calibration=None" behavior.
-        std::string baselineProfile = "NONE";
-        if (const char* v = std::getenv("RIP_BASELINE_PROFILE")) {
-            baselineProfile = v;
-            std::transform(baselineProfile.begin(), baselineProfile.end(), baselineProfile.begin(), ::toupper);
-        }
-
-        double baseInkLimit = 1.0;
-        double baseCScale = 1.0, baseMScale = 1.0, baseYScale = 1.0, baseKScale = 1.0;
-        int baseThresholdBias = 0;
-
-        if (baselineProfile == "ANYFLOW_V1") {
-            baseInkLimit = 0.82;
-            baseCScale = 0.86;
-            baseMScale = 0.92;
-            baseYScale = 0.75;
-            baseKScale = 0.93;
-            baseThresholdBias = 10;
-        }
-
-        // User-facing calibration knobs (env)
-        // RIP_INK_LIMIT: 0..1 (or 0..100 as percent). Default 1.0
-        // RIP_[C|M|Y|K]_SCALE: per-channel multiplier. Default 1.0
-        // RIP_THRESHOLD_BIAS: -64..+64; positive = lighter (fewer dots)
-        double userInkLimit = readEnvDouble("RIP_INK_LIMIT", 1.0);
-        if (userInkLimit > 1.0) {
-            userInkLimit = userInkLimit / 100.0;
-        }
-        userInkLimit = clampDouble(userInkLimit, 0.0, 1.0);
-
-        const double userCScale = clampDouble(readEnvDouble("RIP_C_SCALE", 1.0), 0.0, 2.0);
-        const double userMScale = clampDouble(readEnvDouble("RIP_M_SCALE", 1.0), 0.0, 2.0);
-        const double userYScale = clampDouble(readEnvDouble("RIP_Y_SCALE", 1.0), 0.0, 2.0);
-        const double userKScale = clampDouble(readEnvDouble("RIP_K_SCALE", 1.0), 0.0, 2.0);
-
-        int userThresholdBias = static_cast<int>(readEnvDouble("RIP_THRESHOLD_BIAS", 0.0));
-        userThresholdBias = clampInt(userThresholdBias, -64, 64);
-
-        // Effective tuning = baseline linearization * user calibration
-        const double globalInkLimit = clampDouble(baseInkLimit * userInkLimit, 0.0, 1.0);
-        const double cScale = clampDouble(baseCScale * userCScale, 0.0, 2.0);
-        const double mScale = clampDouble(baseMScale * userMScale, 0.0, 2.0);
-        const double yScale = clampDouble(baseYScale * userYScale, 0.0, 2.0);
-        const double kScale = clampDouble(baseKScale * userKScale, 0.0, 2.0);
-        const int thresholdBias = clampInt(baseThresholdBias + userThresholdBias, -64, 64);
-
         if (useTrueCmyk) {
             std::ostringstream tune;
-            tune << "RIP baseline=" << baselineProfile
-                 << " BASE[INK=" << baseInkLimit << " C=" << baseCScale << " M=" << baseMScale
-                 << " Y=" << baseYScale << " K=" << baseKScale << " BIAS=" << baseThresholdBias << "]"
-                 << " USER[INK=" << userInkLimit << " C=" << userCScale << " M=" << userMScale
-                 << " Y=" << userYScale << " K=" << userKScale << " BIAS=" << userThresholdBias << "]"
+            tune << "RIP baseline=" << runtimeCfg.baselineProfile
                  << " => EFFECTIVE[INK=" << globalInkLimit << " C=" << cScale << " M=" << mScale
                  << " Y=" << yScale << " K=" << kScale << " BIAS=" << thresholdBias << "]";
             logInfo(tune.str());
@@ -238,19 +172,8 @@ int main(int argc, char* argv[]) {
 
         std::vector<PageData> planes;
 
-        bool invertBits = false;
-        if (const char* v = std::getenv("JSL_INVERT_BITS")) {
-            std::string s = v;
-            std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-            invertBits = !(s.empty() || s == "0" || s == "false" || s == "no" || s == "off");
-        }
-
-        bool testPattern = false;
-        if (const char* v = std::getenv("JSL_TEST_PATTERN")) {
-            std::string s = v;
-            std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-            testPattern = !(s.empty() || s == "0" || s == "false" || s == "no" || s == "off");
-        }
+        const bool invertBits = runtimeCfg.invertBits;
+        const bool testPattern = runtimeCfg.testPattern;
 
         if (testPattern) {
             logInfo("JSL_TEST_PATTERN=1 enabled (Magenta plane forced solid, others zero)");
@@ -261,9 +184,8 @@ int main(int argc, char* argv[]) {
 
         // Target strip width for packed payload geometry (must match JSL job stripWidth).
         uint32_t targetStripWidth = static_cast<uint32_t>(rasterInfo.width);
-        if (const char* sw = std::getenv("JSL_STRIP_WIDTH")) {
-            uint32_t parsed = static_cast<uint32_t>(std::strtoul(sw, nullptr, 10));
-            if (parsed > 0) targetStripWidth = parsed;
+        if (runtimeCfg.stripWidth > 0) {
+            targetStripWidth = runtimeCfg.stripWidth;
         }
 
         auto repackToStripWidth = [&](const std::vector<uint8_t>& srcPacked, int srcWidth, int height, int dstWidth) -> std::vector<uint8_t> {
@@ -370,7 +292,11 @@ int main(int argc, char* argv[]) {
             for (uint8_t b : pd.data) {
                 if (b != 0) {
                     ++nonZeroBytes;
+#if defined(_WIN32)
                     oneBits += static_cast<size_t>(__popcnt16(static_cast<unsigned short>(b)));
+#else
+                    oneBits += static_cast<size_t>(__builtin_popcount(static_cast<unsigned int>(b)));
+#endif
                 }
             }
             const double nonZeroPct = pd.data.empty() ? 0.0 : (100.0 * static_cast<double>(nonZeroBytes) / static_cast<double>(pd.data.size()));
@@ -391,6 +317,7 @@ int main(int argc, char* argv[]) {
                        std::to_string(p.data.size()) + " bytes");
             }
             logInfo("Done! (dry run)");
+            Logger::event("rip.completed", {{"mode", "dry_run"}, {"result", "ok"}});
             return 0;
         }
 
@@ -398,12 +325,12 @@ int main(int argc, char* argv[]) {
 
         JSLWrapper jsl;
         if (!jsl.initialize()) {
-            logError("Failed to initialize JSL");
-            return 1;
+            return fail(ErrorCode::JslInitFailed, "Failed to initialize JSL");
         }
 
         std::string jobId = generateJobId();
         logInfo("Job ID: " + jobId);
+        Logger::event("rip.job.created", {{"job_id", jobId}, {"dpi", std::to_string(args.dpi)}});
 
         JobConfig jobConfig;
         jobConfig.destination = args.pesIp;
@@ -412,19 +339,9 @@ int main(int argc, char* argv[]) {
 
         // Strip geometry: default to full raster width, but allow fast runtime overrides.
         // Useful because some printer/JSL profiles expect specific strip metadata.
-        uint32_t stripStart = 0;
+        uint32_t stripStart = runtimeCfg.stripStart;
         // Default to payload geometry width unless explicitly overridden.
-        uint32_t stripWidth = targetStripWidth;
-
-        if (const char* ss = std::getenv("JSL_STRIP_START")) {
-            stripStart = static_cast<uint32_t>(std::strtoul(ss, nullptr, 10));
-        }
-        if (const char* sw = std::getenv("JSL_STRIP_WIDTH")) {
-            uint32_t parsed = static_cast<uint32_t>(std::strtoul(sw, nullptr, 10));
-            if (parsed > 0) {
-                stripWidth = parsed;
-            }
-        }
+        uint32_t stripWidth = (runtimeCfg.stripWidth > 0) ? runtimeCfg.stripWidth : targetStripWidth;
 
         jobConfig.stripStart = stripStart;
         jobConfig.stripWidth = stripWidth;
@@ -442,37 +359,16 @@ int main(int argc, char* argv[]) {
 
         // Optional PES preflight via existing thrift_controller.py
         // Required on some Kareela builds where JSL data path (Gymea) needs an active print session.
-        const char* thriftControllerPathEnv = std::getenv("THRIFT_CONTROLLER_PATH");
-        std::string thriftControllerPath = (thriftControllerPathEnv && std::strlen(thriftControllerPathEnv) > 0)
-            ? std::string(thriftControllerPathEnv)
-            : std::string("C:\\Users\\Arrow\\Arrow-Rip\\src\\thrift_controller_fullcycle.py");
-        int thriftControlPort = 13001;
-        if (const char* p = std::getenv("THRIFT_CONTROL_PORT")) {
-            thriftControlPort = std::atoi(p);
-            if (thriftControlPort <= 0) thriftControlPort = 13001;
-        }
+        std::string thriftControllerPath = runtimeCfg.thriftControllerPath;
+        int thriftControlPort = runtimeCfg.thriftControlPort;
 
         // Force deterministic runtime (no PATH roulette)
-        std::string pythonExe = "C:\\Python27\\python.exe";
-        if (const char* py = std::getenv("THRIFT_PYTHON_EXE")) {
-            if (std::strlen(py) > 0) pythonExe = py;
-        }
+        std::string pythonExe = runtimeCfg.pythonExe;
 
         // Ensure SDK imports always resolve
-        std::string pdlThriftRoot = "C:\\Users\\Arrow\\Arrow-Rip\\vendor\\pdl_py";
-        if (const char* root = std::getenv("PDL_THRIFT_ROOT")) {
-            if (std::strlen(root) > 0) pdlThriftRoot = root;
-        }
+        std::string pdlThriftRoot = runtimeCfg.pdlThriftRoot;
 
-        // C5: Feature flag from day 1 - allows instant rollback without rebuild
-        // CLI flag must take precedence in day-to-day debugging.
-        bool useLegacyOrchestration = args.legacyJsl;
-        if (const char* legacyEnv = std::getenv("USE_LEGACY_ORCHESTRATION")) {
-            std::string v = legacyEnv;
-            std::transform(v.begin(), v.end(), v.begin(), ::tolower);
-            bool envEnabled = !(v.empty() || v == "0" || v == "false" || v == "no" || v == "off");
-            useLegacyOrchestration = useLegacyOrchestration || envEnabled;
-        }
+        bool useLegacyOrchestration = runtimeCfg.useLegacyOrchestration;
 
         if (useLegacyOrchestration) {
             if (args.legacyJsl) {
@@ -514,16 +410,8 @@ int main(int argc, char* argv[]) {
                     return true; // no-op unless thrift is enabled
                 }
 
-                int timeoutMs = 8000;
-                int pollMs = 250;
-                if (const char* v = std::getenv("THRIFT_WAIT_JOB_TIMEOUT_MS")) {
-                    int parsed = std::atoi(v);
-                    if (parsed > 0) timeoutMs = parsed;
-                }
-                if (const char* v = std::getenv("THRIFT_WAIT_JOB_POLL_MS")) {
-                    int parsed = std::atoi(v);
-                    if (parsed > 0) pollMs = parsed;
-                }
+                int timeoutMs = runtimeCfg.thriftWaitJobTimeoutMs;
+                int pollMs = runtimeCfg.thriftWaitJobPollMs;
 
                 const int maxTries = std::max(1, timeoutMs / pollMs);
 
@@ -649,11 +537,7 @@ int main(int argc, char* argv[]) {
                 }
 
                 // Keep session alive briefly so PES can consume queued data before close/finish.
-                int postStartHoldMs = 8000;
-                if (const char* v = std::getenv("JSL_POST_START_HOLD_MS")) {
-                    int parsed = std::atoi(v);
-                    if (parsed >= 0) postStartHoldMs = parsed;
-                }
+                int postStartHoldMs = runtimeCfg.postStartHoldMs;
                 if (postStartHoldMs > 0) {
                     logInfo("Holding after start for " + std::to_string(postStartHoldMs) + "ms");
                     std::this_thread::sleep_for(std::chrono::milliseconds(postStartHoldMs));
@@ -668,12 +552,7 @@ int main(int argc, char* argv[]) {
                 }
 
                 // Optional immediate finish (default OFF for debug to avoid draining too early).
-                bool doImmediateFinish = false;
-                if (const char* v = std::getenv("JSL_IMMEDIATE_FINISH")) {
-                    std::string s = v;
-                    std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-                    doImmediateFinish = !(s.empty() || s == "0" || s == "false" || s == "no" || s == "off");
-                }
+                bool doImmediateFinish = runtimeCfg.immediateFinish;
                 if (doImmediateFinish) {
                     runThriftCommands("finish");
                 } else {
@@ -691,8 +570,7 @@ int main(int argc, char* argv[]) {
             submitOk = orch.runPrintSession(jsl, jobConfig, planeColors, planes, args.legacyJsl);
             
             if (!submitOk) {
-                logError("PES orchestrator print session failed");
-                return 1;
+                return fail(ErrorCode::JslSubmissionFailed, "PES orchestrator print session failed");
             }
         }
 
@@ -701,8 +579,7 @@ int main(int argc, char* argv[]) {
         planes.shrink_to_fit();
 
         if (!submitOk) {
-            logError("Print job submission failed");
-            return 1;
+            return fail(ErrorCode::JslSubmissionFailed, "Print job submission failed");
         }
 
         logInfo("JSL submission complete for job " + jobId);
@@ -725,6 +602,7 @@ int main(int argc, char* argv[]) {
         if (vr.passed()) {
             logInfo(vr.summary);
             logInfo("Done!");
+            Logger::event("rip.completed", {{"mode", "submit_and_verify"}, {"result", "ok"}, {"job_id", jobId}});
             return 0;
         } else {
             std::string summaryLower = vr.summary;
@@ -735,6 +613,7 @@ int main(int argc, char* argv[]) {
                 logInfo("Print submission completed; verification unavailable in this environment.");
                 logInfo(vr.summary);
                 logInfo("Done (submission path).");
+                Logger::event("rip.completed", {{"mode", "submit_only"}, {"result", "ok"}, {"job_id", jobId}});
                 return 0;
             }
 
@@ -742,12 +621,11 @@ int main(int argc, char* argv[]) {
             logError(vr.summary);
             logError("Job was submitted but not executed. "
                      "Check printer status and Gymea log.");
-            return 1;
+            return fail(ErrorCode::VerificationFailed, "Print verification failed for job " + jobId);
         }
 
     } catch (const std::exception& e) {
-        logError(std::string("Exception: ") + e.what());
-        return 1;
+        return fail(ErrorCode::RuntimeException, std::string("Exception: ") + e.what());
     }
 }
 

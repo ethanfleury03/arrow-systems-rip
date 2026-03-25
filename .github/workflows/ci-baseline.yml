@@ -33,6 +33,11 @@ jobs:
         run: |
           cmake --build src/build --config Release --parallel
 
+      - name: Run unit tests (ctest)
+        shell: pwsh
+        run: |
+          ctest --test-dir src/build -C Release --output-on-failure
+
       - name: Verify artifact exists
         shell: pwsh
         run: |
